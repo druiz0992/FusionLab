@@ -47,6 +47,25 @@ are counted rather than interpreted as valid samples.
 The receiver preserves wire measurements. Units, gravity interpretation,
 calibration, interpolation and localization belong in processing modules.
 
+Package layout:
+
+```text
+src/sensor_stream/
+  config.py, errors.py, models.py, stats.py   receiver settings, errors, typed samples, counters
+  source.py                                   async single-device source (SensorStreamSource)
+  protocol/                                   Wi-Fi chunk framing, USB PeerTalk, Protobuf decoding
+  recording.py                                SessionRecorder: metadata, events.jsonl, assets
+  live.py                                     optional Tk RGB preview
+  cli.py                                      `sensor-stream` commands
+  inspection/                                 offline reading of finished captures:
+    capture.py                                  load_capture validation, summaries, plots
+    camera.py, depth.py, gps.py                 per-sensor integrity checks and plots
+    depth_analysis.py, camera_replay.py         `analyze-depth`, `replay-camera`
+```
+
+The acquisition core never imports `inspection/`. Processing code reads
+captures through `sensor_stream.inspection.load_capture` and `image_path`.
+
 ## Python API
 
 ```python

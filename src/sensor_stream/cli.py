@@ -255,7 +255,7 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "analyze-depth":
-            from .depth_analysis import analyze
+            from .inspection.depth_analysis import analyze
 
             output = args.output_dir or args.capture / "depth_analysis"
             report = analyze(
@@ -269,7 +269,7 @@ def main() -> None:
             print(json.dumps(report, indent=2))
             print(f"Analysis saved to {output.resolve()}", file=sys.stderr)
         elif args.command == "replay-camera":
-            from .camera_replay import write_replay
+            from .inspection.camera_replay import write_replay
 
             output = args.output or args.capture / "camera_replay.html"
             count = write_replay(args.capture, output)

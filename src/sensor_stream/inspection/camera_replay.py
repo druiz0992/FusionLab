@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
-from .camera_inspection import image_path
-from .inspection import load_capture
+from .camera import image_path
+from .capture import load_capture
 
 
 def write_replay(capture: Path, output: Path) -> int:

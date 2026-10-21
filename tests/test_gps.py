@@ -11,7 +11,7 @@ from sensor_stream.protocol.decoder import decode_message, GpsRecord
 from sensor_stream.protocol.proto.imu_pb2 import Envelope
 from sensor_stream.recording import SessionRecorder
 from sensor_stream.inspection import load_capture, summarize, plot_capture
-from sensor_stream.gps_inspection import covariance_sigma
+from sensor_stream.inspection.gps import covariance_sigma
 from test_sensor_stream import frame, imu_payload
 
 

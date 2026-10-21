@@ -3,7 +3,7 @@ import struct
 import unittest
 from pathlib import Path
 
-from sensor_stream.depth_analysis import pair_frames, analyze
+from sensor_stream.inspection.depth_analysis import pair_frames, analyze
 from sensor_stream import DepthSample, ReceiverConfig
 from sensor_stream.recording import SessionRecorder
 

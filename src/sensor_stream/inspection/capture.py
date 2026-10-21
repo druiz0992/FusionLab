@@ -6,9 +6,9 @@ from math import acos, degrees, isfinite, sqrt
 from pathlib import Path
 from statistics import mean, median
 from typing import Any
-from .gps_inspection import validate_gps, gps_summary, plot_gps
-from .depth_inspection import check_depth, depth_summary, plot_depth
-from .camera_inspection import check_frame, camera_summary, plot_camera
+from .gps import validate_gps, gps_summary, plot_gps
+from .depth import check_depth, depth_summary, plot_depth
+from .camera import check_frame, camera_summary, plot_camera
 
 
 def load_capture(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:

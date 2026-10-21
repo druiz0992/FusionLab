@@ -7,7 +7,7 @@ from pathlib import Path
 from statistics import median
 import sys
 
-from .camera_inspection import image_path
+from .camera import image_path
 
 
 def depth_values(capture: Path, event: dict) -> array:

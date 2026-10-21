@@ -178,7 +178,7 @@ def calibrate(
     camera_stream=None,
 ) -> dict:
     from sensor_stream.inspection import load_capture
-    from sensor_stream.camera_inspection import image_path
+    from sensor_stream.inspection import image_path
 
     cv, np = dependencies()
     if columns < 3 or rows < 3 or stride < 1 or max_views < 15:

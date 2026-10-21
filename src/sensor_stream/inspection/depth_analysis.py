@@ -6,9 +6,9 @@ from math import isfinite
 from pathlib import Path
 import json
 
-from .inspection import load_capture
-from .depth_inspection import depth_values
-from .camera_inspection import image_path
+from .capture import load_capture
+from .depth import depth_values
+from .camera import image_path
 
 
 def pair_frames(

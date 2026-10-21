@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from hashlib import sha256
 
-from sensor_stream.camera_replay import write_replay
+from sensor_stream.inspection.camera_replay import write_replay
 
 
 class CameraReplayTests(unittest.TestCase):
