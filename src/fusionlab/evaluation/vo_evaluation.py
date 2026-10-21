@@ -5,6 +5,14 @@ from math import acos, degrees, sqrt
 from pathlib import Path
 from statistics import median
 
+# Method caveats saved with every report (what the numbers do not show).
+SUMMARY_LIMITS = (
+    "Segment span excludes bootstrap waiting. Step ratios use segments with at "
+    "least five increments; they flag variability, not proven errors. No aligned "
+    "position ground truth or common scale; accuracy and metric drift are not "
+    "measured."
+)
+
 
 def summarize_run(directory: Path):
     """Describe continuity and pose stability without claiming ground-truth accuracy."""
@@ -58,7 +66,7 @@ def summarize_run(directory: Path):
         "steps_above_5_times_segment_median": sum(
             ratio > 5 for ratio in large_step_ratios
         ),
-        "limits": "Segment span excludes bootstrap waiting. Step ratios use segments with at least five increments; they flag variability, not proven errors. No aligned position ground truth or common scale; accuracy and metric drift are not measured.",
+        "limits": SUMMARY_LIMITS,
     }
 
 

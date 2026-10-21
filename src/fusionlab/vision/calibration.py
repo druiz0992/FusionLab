@@ -4,6 +4,12 @@ import json
 from math import isfinite
 from pathlib import Path
 
+# Method caveats saved with every report (what the numbers do not show).
+CALIBRATION_LIMITS = (
+    "Held-out poses are fitted with fixed intrinsics. Low reprojection error is not "
+    "proof of metric accuracy. No depth/IMU extrinsics or timing calibration."
+)
+
 
 def dependencies():
     try:
@@ -162,7 +168,7 @@ def fit_points(points, size, *, columns=9, rows=6, square_mm=25.0):
         "warnings": warnings,
         "status": "needs_review",
         "model": "OpenCV pinhole, five distortion coefficients, original stored pixels",
-        "limits": "Held-out poses are fitted with fixed intrinsics. Low reprojection error is not proof of metric accuracy. No depth/IMU extrinsics or timing calibration.",
+        "limits": CALIBRATION_LIMITS,
     }
 
 

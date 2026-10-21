@@ -14,6 +14,12 @@ from fusionlab.vision.odometry.visual_odometry import MonocularOdometry
 from fusionlab.vision.tracks import read_track_frames
 from fusionlab.visualization.odometry_replay import OdometryReplay
 
+# Method caveats saved with every report (what the numbers do not show).
+CAMERA_CONFIGURATION_CAVEAT = (
+    "Requires matching camera, zoom and image processing; resolution alone cannot "
+    "verify compatibility."
+)
+
 
 def run_odometry(
     tracks: Path,
@@ -88,7 +94,7 @@ def run_odometry(
                 )
                 + "no loop closure, gravity alignment or metric scale."
             ),
-            "camera_configuration": "Requires matching camera, zoom and image processing; resolution alone cannot verify compatibility.",
+            "camera_configuration": CAMERA_CONFIGURATION_CAVEAT,
         }
         (output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
         return report

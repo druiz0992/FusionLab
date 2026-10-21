@@ -8,6 +8,37 @@ from pathlib import Path
 
 from fusionlab.vision.tracks import TrackFrame
 
+# Method caveats saved with every report (what the numbers do not show).
+DIAGNOSTIC_LIMITS = (
+    "Diagnostic only; no acceptance changes. Constant velocity is a hypothesis. "
+    "Shared pre-update landmarks make pose comparisons conditional on map accuracy. "
+    "CV uses online past poses, not retroactively smoothed history. Source-clock "
+    "alignment/offset and gyro units rad/s are assumptions. Without extrinsics, "
+    "gyro comparisons are angle magnitudes only. No exposure timing, bias or "
+    "rolling-shutter correction."
+)
+
+FINDINGS_INTERPRETATION = (
+    "Visual poses fit these visual landmarks by construction, so this is not an "
+    "independent accuracy comparison. CV failures can reflect genuine acceleration "
+    "or incorrect previous poses. Gyro magnitude differences assume aligned source "
+    "clocks; magnitude agreement cannot verify rotation axes."
+)
+
+FINDINGS_OUTPUT_GUIDE = (
+    "Inspect `index.html` for ranked innovations and every tracking loss, with "
+    "matching overlay images. `frames.jsonl` preserves every frame; "
+    "`ranked_events.json` includes segment-normalized step flags. Spatial coverage "
+    "uses convex-hull image fraction, a 4x4 grid and normalized-coordinate PCA "
+    "minor/major eigenvalue ratio. Depth quantiles have independent arbitrary scale "
+    "per segment."
+)
+
+FINDINGS_SCOPE = (
+    "No constant-velocity or gyro constraints were added to estimation. A low-error "
+    "visual fit does not establish a correct trajectory."
+)
+
 
 def rotation_angle(rotation):
     import numpy as np
@@ -414,7 +445,7 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
         ),
         "camera_from_imu_supplied": camera_from_imu is not None,
         "imu_offset_ms": imu_offset_ms,
-        "limits": "Diagnostic only; no acceptance changes. Constant velocity is a hypothesis. Shared pre-update landmarks make pose comparisons conditional on map accuracy. CV uses online past poses, not retroactively smoothed history. Source-clock alignment/offset and gyro units rad/s are assumptions. Without extrinsics, gyro comparisons are angle magnitudes only. No exposure timing, bias or rolling-shutter correction.",
+        "limits": DIAGNOSTIC_LIMITS,
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     (output / "ranked_events.json").write_text(
@@ -544,7 +575,7 @@ def write_findings(output):
             }
             for r in disagreements[:10]
         ],
-        "interpretation": "Visual poses fit these visual landmarks by construction, so this is not an independent accuracy comparison. CV failures can reflect genuine acceleration or incorrect previous poses. Gyro magnitude differences assume aligned source clocks; magnitude agreement cannot verify rotation axes.",
+        "interpretation": FINDINGS_INTERPRETATION,
     }
     (output / "findings.json").write_text(
         json.dumps(findings, indent=2, allow_nan=False) + "\n"
@@ -559,9 +590,9 @@ def write_findings(output):
         f"Tracking losses with CV available: {findings['losses_with_cv']}; CV passing the same geometric gates: {len(recovered)}.",
         f"Median visual/gyro rotation-magnitude difference: {findings['median_gyro_visual_angle_difference_deg']} degrees.",
         "",
-        "Inspect `index.html` for ranked innovations and every tracking loss, with matching overlay images. `frames.jsonl` preserves every frame; `ranked_events.json` includes segment-normalized step flags. Spatial coverage uses convex-hull image fraction, a 4x4 grid and normalized-coordinate PCA minor/major eigenvalue ratio. Depth quantiles have independent arbitrary scale per segment.",
+        FINDINGS_OUTPUT_GUIDE,
         "",
-        "No constant-velocity or gyro constraints were added to estimation. A low-error visual fit does not establish a correct trajectory. Prioritize events with weak spatial support and gyro disagreement, then test timing/extrinsics before treating IMU as a rotation acceptance gate.",
+        FINDINGS_SCOPE,
     ]
     (output / "findings.md").write_text("\n".join(lines) + "\n")
     try:

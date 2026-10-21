@@ -9,6 +9,12 @@ from pathlib import Path
 
 from fusionlab.vision.tracks import TrackFrame
 
+# Method caveats saved with every report (what the numbers do not show).
+TRACKING_SCOPE = (
+    "Pixel tracks only; no pose, metric motion or calibrated geometry. RANSAC is "
+    "heuristic and can be degenerate."
+)
+
 
 @dataclass(frozen=True)
 class TrackingConfig:
@@ -410,7 +416,7 @@ def track_capture(
             "config": asdict(config),
             "display_rotation_clockwise_deg": display_rotation,
             "status": "complete",
-            "scope": "Pixel tracks only; no pose, metric motion or calibrated geometry. RANSAC is heuristic and can be degenerate.",
+            "scope": TRACKING_SCOPE,
         }
         (output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
         return report

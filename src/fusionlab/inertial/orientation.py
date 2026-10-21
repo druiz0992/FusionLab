@@ -9,6 +9,12 @@ from typing import Iterable
 from sensor_stream import ImuSample
 from sensor_stream.models import Quaternion
 
+# Method caveats saved with every report (what the numbers do not show).
+ORIENTATION_NOTE = (
+    "Phone orientation is a comparison estimate, not ground truth; gyro assumed "
+    "rad/s."
+)
+
 IDENTITY: Quaternion = (0.0, 0.0, 0.0, 1.0)
 
 
@@ -149,7 +155,7 @@ def summary(estimates: list[OrientationEstimate]) -> dict:
         "rms_error_deg": sqrt(mean(e * e for e in errors)) if errors else None,
         "max_error_deg": max(errors) if errors else None,
         "last_compared_error_deg": errors[-1] if errors else None,
-        "note": "Phone orientation is a comparison estimate, not ground truth; gyro assumed rad/s.",
+        "note": ORIENTATION_NOTE,
     }
 
 

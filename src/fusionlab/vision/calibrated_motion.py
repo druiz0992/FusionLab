@@ -5,6 +5,22 @@ from pathlib import Path
 
 from fusionlab.vision.tracks import read_track_frame_pair
 
+# Method caveats saved with every report (what the numbers do not show).
+MOTION_SCOPE = (
+    "Pairwise candidate only. Translation magnitude is unknown; no trajectory or "
+    "metric distance. Rejected poses must not be accumulated."
+)
+
+MOTION_WARNING = (
+    "Planar scenes, moving objects, rolling shutter and calibration mismatch can "
+    "still produce misleading poses."
+)
+
+SEPARATE_CALIBRATION_WARNING = (
+    "Calibration belongs to a separate recording; matching camera, zoom and "
+    "processing settings must be verified by the user."
+)
+
 
 def estimate_motion(
     points_a,
@@ -113,10 +129,8 @@ def estimate_motion(
             "min_parallax_deg": min_parallax_deg,
             "min_inlier_ratio": 0.5,
         },
-        "scope": "Pairwise candidate only. Translation magnitude is unknown; no trajectory or metric distance. Rejected poses must not be accumulated.",
-        "warnings": [
-            "Planar scenes, moving objects, rolling shutter and calibration mismatch can still produce misleading poses."
-        ],
+        "scope": MOTION_SCOPE,
+        "warnings": [MOTION_WARNING],
     }
 
 
@@ -167,9 +181,7 @@ def analyze_motion(
         calibration_status=calibration_data.get("status", "unknown"),
         tracking_camera_matrix=camera.tolist(),
     )
-    report["warnings"].append(
-        "Calibration belongs to a separate recording; matching camera, zoom and processing settings must be verified by the user."
-    )
+    report["warnings"].append(SEPARATE_CALIBRATION_WARNING)
     output.mkdir(parents=True, exist_ok=False)
     (output / "motion.json").write_text(
         json.dumps(report, indent=2, allow_nan=False) + "\n"

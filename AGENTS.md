@@ -50,6 +50,11 @@ or historical analysis outputs to get oriented; use [data/README.md](data/README
 - **Clear, well-commented code.** This is an educational project: comments must
   explain the algorithm, its assumptions, units, frames and why a step exists,
   not restate the syntax. Give public functions and classes docstrings.
+- **Caveats in outputs, conclusions in docs.** Saved reports may carry method
+  caveats (what a number does and does not measure) as named module constants.
+  Never hard-code findings, recommendations or next steps in generated output;
+  they go stale and repeat for runs they do not fit. Put them in
+  `docs/2_status_and_roadmap.md` or `docs/3_experiment_results.md`.
 - **Short, focused functions.** One responsibility per function; split long
   functions into named steps. One statement per line. Descriptive names that
   carry units or frames where ambiguous (`dt_seconds`, `R_camera_world`).

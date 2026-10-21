@@ -1,5 +1,11 @@
 """Bounded local bundle adjustment with two fixed camera-pose anchors."""
 
+# Method caveats saved with every report (what the numbers do not show).
+BUNDLE_ADJUSTMENT_LIMITS = (
+    "Bounded cost-decreasing step may be accepted at evaluation limit; convergence "
+    "is reported separately. Two complete anchor poses remain fixed."
+)
+
 
 def optimize_window(poses, points, observations, *, focal, max_evaluations=25):
     """Jointly refine camera poses 2..N and 3D points in an arbitrary-scale frame.
@@ -151,6 +157,6 @@ def optimize_window(poses, points, observations, *, focal, max_evaluations=25):
         "solver_converged": bool(solution.success),
         "evaluations": solution.nfev,
         "fixed_pose_indices": [0, 1],
-        "limits": "Bounded cost-decreasing step may be accepted at evaluation limit; convergence is reported separately. Two complete anchor poses remain fixed.",
+        "limits": BUNDLE_ADJUSTMENT_LIMITS,
     }
     return refined_poses, refined_points, diagnostics

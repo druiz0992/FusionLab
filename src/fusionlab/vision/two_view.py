@@ -6,6 +6,17 @@ from pathlib import Path
 
 from fusionlab.vision.tracks import read_track_frame_pair
 
+# Method caveats saved with every report (what the numbers do not show).
+TWO_VIEW_SCOPE = (
+    "Uncalibrated epipolar geometry only; no pose, scale or verified motion. "
+    "Distortion is not corrected."
+)
+
+HOMOGRAPHY_WARNING = (
+    "Strong homography support: planar scene or rotation may make geometry "
+    "ambiguous."
+)
+
 
 def estimate_geometry(points_a, points_b, *, threshold_px=1.5):
     """Fit x_b.T F x_a = 0 and report Sampson residuals in tracking pixels.
@@ -64,13 +75,9 @@ def estimate_geometry(points_a, points_b, *, threshold_px=1.5):
         "median_image_displacement_px": float(np.median(np.linalg.norm(b - a, axis=1))),
         "homography_inliers": homography_inliers,
         "warnings": (
-            [
-                "Strong homography support: planar scene or rotation may make geometry ambiguous."
-            ]
-            if homography_inliers >= 0.9 * inliers.sum()
-            else []
+            [HOMOGRAPHY_WARNING] if homography_inliers >= 0.9 * inliers.sum() else []
         ),
-        "scope": "Uncalibrated epipolar geometry only; no pose, scale or verified motion. Distortion is not corrected.",
+        "scope": TWO_VIEW_SCOPE,
     }
 
 

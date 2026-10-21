@@ -3,6 +3,14 @@
 import json
 from pathlib import Path
 
+# Method caveats saved with every report (what the numbers do not show).
+TRAJECTORY_SCORE_LIMITS = (
+    "Per-segment fit measures local consistency, not whole-route drift or metric "
+    "scale recovery. Short segments may fit well despite fragmentation. No "
+    "extrapolation across missing ground truth. Frame fractions describe processed "
+    "frames, not time coverage."
+)
+
 
 def similarity_alignment(estimated, reference):
     """Least-squares proper Sim(3), with positive scale and noncollinear support."""
@@ -154,7 +162,7 @@ def evaluate_run(run_dir, groundtruth, output, *, max_gap_ms=50.0):
         max_reference_gap_ms=max_gap_ms,
         segments=segments,
         alignment="Independent positive-scale Sim(3) per segment; fitted on scored samples",
-        limits="Per-segment fit measures local consistency, not whole-route drift or metric scale recovery. Short segments may fit well despite fragmentation. No extrapolation across missing ground truth. Frame fractions describe processed frames, not time coverage.",
+        limits=TRAJECTORY_SCORE_LIMITS,
     )
     output.mkdir(parents=True, exist_ok=False)
     (output / "summary.json").write_text(

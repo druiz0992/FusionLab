@@ -10,6 +10,14 @@ from .capture import load_capture
 from .depth import depth_values
 from .camera import image_path
 
+# Method caveats saved with every report (what the numbers do not show).
+DEPTH_ANALYSIS_INTERPRETATION = (
+    "Zero, negative, nonfinite and uint16 maximum are counted separately; "
+    "invalid/saturation semantics are not proven. Timestamp pairing is not exposure "
+    "synchronization. RGB resizing and edge overlap are diagnostics, not calibrated "
+    "registration."
+)
+
 
 def pair_frames(
     depth: list[dict], cameras: list[dict], tolerance_ms: float
@@ -147,7 +155,7 @@ def analyze(
             else None
         ),
         "depth_edge_threshold_raw": edge_threshold,
-        "interpretation": "Zero, negative, nonfinite and uint16 maximum are counted separately; invalid/saturation semantics are not proven. Timestamp pairing is not exposure synchronization. RGB resizing and edge overlap are diagnostics, not calibrated registration.",
+        "interpretation": DEPTH_ANALYSIS_INTERPRETATION,
     }
     if plots:
         report["sampled_edge_checks"] = _plots(

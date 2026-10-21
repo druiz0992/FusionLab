@@ -6,6 +6,12 @@ from pathlib import Path
 from statistics import mean, median
 from typing import Any
 
+# Method caveats saved with every report (what the numbers do not show).
+GPS_SCATTER_NOTE = (
+    "Scatter includes real motion and is not absolute accuracy. Altitude datum and "
+    "covariance mapping need producer validation."
+)
+
 
 def validate_gps(event: dict[str, Any]) -> None:
     for key in ("latitude", "longitude", "altitude"):
@@ -117,7 +123,7 @@ def gps_summary(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "interpretable_covariance_samples": sum(
                     covariance_sigma(s) is not None for s in samples
                 ),
-                "note": "Scatter includes real motion and is not absolute accuracy. Altitude datum and covariance mapping need producer validation.",
+                "note": GPS_SCATTER_NOTE,
             }
         )
     return result

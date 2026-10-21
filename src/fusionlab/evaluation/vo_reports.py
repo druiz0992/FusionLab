@@ -6,6 +6,20 @@ These summarize saved results for inspection; they do not change estimation.
 import json
 from pathlib import Path
 
+# Method caveats saved with every report (what the numbers do not show).
+FAILURE_INTERPRETATION = (
+    "Categories describe failed gates, not root causes. Pixel errors approximate "
+    "normalized reprojection error times mean tracking focal length. Inspect video "
+    "before attributing blur, calibration mismatch or bad landmarks."
+)
+
+GEOMETRY_AUDIT_INTERPRETATION = (
+    "Diagnostic only. Recovered failed frames are independent counterfactuals on "
+    "the original map, not a rerun with fewer resets. Counts do not predict the "
+    "number of segments after a fix. Narrow-angle triangulation is sensitive to "
+    "errors but this audit does not measure true landmark depth accuracy."
+)
+
 
 def write_failure_report(output: Path):
     """Summarize observed failure conditions without asserting visual causes."""
@@ -58,7 +72,7 @@ def write_failure_report(output: Path):
         "failure_count": len(failures),
         "failure_categories": dict(Counter(f["category"] for f in failures)),
         "failures": failures,
-        "interpretation": "Categories describe failed gates, not root causes. Pixel errors approximate normalized reprojection error times mean tracking focal length. Inspect video before attributing blur, calibration mismatch or bad landmarks.",
+        "interpretation": FAILURE_INTERPRETATION,
     }
     (output / "failures.json").write_text(
         json.dumps(report, indent=2, allow_nan=False) + "\n"
@@ -125,7 +139,7 @@ def write_geometry_report(output: Path):
             if refined
             else None
         ),
-        "interpretation": "Diagnostic only. Recovered failed frames are independent counterfactuals on the original map, not a rerun with fewer resets. Counts do not predict the number of segments after a fix. Narrow-angle triangulation is sensitive to errors but this audit does not measure true landmark depth accuracy.",
+        "interpretation": GEOMETRY_AUDIT_INTERPRETATION,
     }
     (output / "geometry_audit.json").write_text(
         json.dumps(report, indent=2, allow_nan=False) + "\n"
@@ -147,8 +161,6 @@ def write_geometry_report(output: Path):
         [
             "",
             report["interpretation"],
-            "",
-            "Next controlled experiments: refine and recompute geometric support before acceptance; evaluate longer-baseline keyframes and multiview landmark refinement. Do not merely relax thresholds or claim these changes will recover the whole walk.",
         ]
     )
     (output / "geometry_audit.md").write_text("\n".join(text) + "\n")
