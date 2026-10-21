@@ -1,0 +1,553 @@
+{
+  "updated": "2026-10-18",
+  "captures": [
+    {
+      "original_path": "data/sessions/session_handling/20261017T104706.936577Z-f5e04584",
+      "session_id": "20261017T104706.936577Z-f5e04584",
+      "status": "interrupted",
+      "samples": 224,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/session_handling/20261017T104706.936577Z-f5e04584",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/session_handling/20261017T104446.907677Z-11c5a737",
+      "session_id": "20261017T104446.907677Z-11c5a737",
+      "status": "interrupted",
+      "samples": 1056,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/session_handling/20261017T104446.907677Z-11c5a737",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/session_handling/20261017T104054.725821Z-5f78f0db",
+      "session_id": "20261017T104054.725821Z-5f78f0db",
+      "status": "interrupted",
+      "samples": 969,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/session_handling/20261017T104054.725821Z-5f78f0db",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rgb_calibration/20261018T071254.770740Z-aeef5133",
+      "session_id": "20261018T071254.770740Z-aeef5133",
+      "status": "interrupted",
+      "samples": 131,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 131,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/calibration/20261018T071254.770740Z-aeef5133",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rgb_calibration/20261018T070843.712391Z-0b2eace8",
+      "session_id": "20261018T070843.712391Z-0b2eace8",
+      "status": "interrupted",
+      "samples": 0,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/calibration/20261018T070843.712391Z-0b2eace8",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rgb_calibration/20261018T071611.049465Z-3cb5f83c",
+      "session_id": "20261018T071611.049465Z-3cb5f83c",
+      "status": "interrupted",
+      "samples": 1583,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 1583,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/sessions/rgb_calibration/20261018T071611.049465Z-3cb5f83c",
+      "role": "selected provisional calibration"
+    },
+    {
+      "original_path": "data/sessions/rgb_calibration/20261018T070742.779041Z-c10cf6c2",
+      "session_id": "20261018T070742.779041Z-c10cf6c2",
+      "status": "interrupted",
+      "samples": 0,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/calibration/20261018T070742.779041Z-c10cf6c2",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rgb_calibration/20261018T071323.558679Z-14ec575a",
+      "session_id": "20261018T071323.558679Z-14ec575a",
+      "status": "interrupted",
+      "samples": 1274,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 1274,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/calibration/20261018T071323.558679Z-14ec575a",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rgb_calibration/20261018T070923.623858Z-935ce609",
+      "session_id": "20261018T070923.623858Z-935ce609",
+      "status": "interrupted",
+      "samples": 1221,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 1221,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/calibration/20261018T070923.623858Z-935ce609",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/side/20261017T103844.640714Z-862fbb29",
+      "session_id": "20261017T103844.640714Z-862fbb29",
+      "status": "completed",
+      "samples": 1198,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/side/20261017T103844.640714Z-862fbb29",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/frame_check/20261017T121603.546253Z-babd36e5",
+      "session_id": "20261017T121603.546253Z-babd36e5",
+      "status": "interrupted",
+      "samples": 1407,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/frame_check/20261017T121603.546253Z-babd36e5",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/frame_check/20261017T121508.751715Z-708f3f0f",
+      "session_id": "20261017T121508.751715Z-708f3f0f",
+      "status": "interrupted",
+      "samples": 0,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/frame_check/20261017T121508.751715Z-708f3f0f",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/camera_stationary/20261017T130611.331149Z-aa6bbf98",
+      "session_id": "20261017T130611.331149Z-aa6bbf98",
+      "status": "interrupted",
+      "samples": 125,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 125,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/camera_stationary/20261017T130611.331149Z-aa6bbf98",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/camera_stationary/20261017T130641.830483Z-46ab52db",
+      "session_id": "20261017T130641.830483Z-46ab52db",
+      "status": "interrupted",
+      "samples": 97,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 97,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/camera_stationary/20261017T130641.830483Z-46ab52db",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/camera_stationary/20261017T130235.738053Z-2e579fd2",
+      "session_id": "20261017T130235.738053Z-2e579fd2",
+      "status": "interrupted",
+      "samples": 159,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 159,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/camera_stationary/20261017T130235.738053Z-2e579fd2",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/camera_same_wifi/20261017T131124.247220Z-74158f8e",
+      "session_id": "20261017T131124.247220Z-74158f8e",
+      "status": "interrupted",
+      "samples": 159,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 159,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/camera_same_wifi/20261017T131124.247220Z-74158f8e",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/camera_imu_usb/20261017T133811.388063Z-d4c10e94",
+      "session_id": "20261017T133811.388063Z-d4c10e94",
+      "status": "interrupted",
+      "samples": 1121,
+      "sensor_samples": {
+        "imu_samples_written": 700,
+        "gps_samples_written": 0,
+        "camera_samples_written": 421,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/camera_imu_usb/20261017T133811.388063Z-d4c10e94",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/camera_imu_usb/20261017T133733.558287Z-1ae7f46d",
+      "session_id": "20261017T133733.558287Z-1ae7f46d",
+      "status": "interrupted",
+      "samples": 0,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/camera_imu_usb/20261017T133733.558287Z-1ae7f46d",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/camera_usb/20261017T133213.487318Z-01d02055",
+      "session_id": "20261017T133213.487318Z-01d02055",
+      "status": "interrupted",
+      "samples": 252,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 252,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/camera_usb/20261017T133213.487318Z-01d02055",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/camera_usb/20261017T133258.237798Z-469a1238",
+      "session_id": "20261017T133258.237798Z-469a1238",
+      "status": "interrupted",
+      "samples": 308,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 308,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/camera_usb/20261017T133258.237798Z-469a1238",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rotate_flat/20261017T105824.232951Z-d3325cb2",
+      "session_id": "20261017T105824.232951Z-d3325cb2",
+      "status": "interrupted",
+      "samples": 1117,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/rotate_flat/20261017T105824.232951Z-d3325cb2",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/gps_stationary/20261017T125220.359684Z-fb8c8f5e",
+      "session_id": "20261017T125220.359684Z-fb8c8f5e",
+      "status": "interrupted",
+      "samples": 25,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 25,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/gps_stationary/20261017T125220.359684Z-fb8c8f5e",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/stand_rotate/20261017T103756.527183Z-7173d899",
+      "session_id": "20261017T103756.527183Z-7173d899",
+      "status": "completed",
+      "samples": 1287,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/stand_rotate/20261017T103756.527183Z-7173d899",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/depth_wall/20261017T134558.791661Z-d57b6f8d",
+      "session_id": "20261017T134558.791661Z-d57b6f8d",
+      "status": "interrupted",
+      "samples": 603,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 603
+      },
+      "canonical_path": "data/archive/sensor_validation/depth_wall/20261017T134558.791661Z-d57b6f8d",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/depth_wall/20261017T135314.687528Z-3d49af57",
+      "session_id": "20261017T135314.687528Z-3d49af57",
+      "status": "interrupted",
+      "samples": 620,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 620
+      },
+      "canonical_path": "data/archive/sensor_validation/depth_wall/20261017T135314.687528Z-3d49af57",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/stationary/20261017T103444.612278Z-1b7d020d",
+      "session_id": "20261017T103444.612278Z-1b7d020d",
+      "status": "interrupted",
+      "samples": 1520,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/stationary/20261017T103444.612278Z-1b7d020d",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rgb_depth_imu_usb/20261017T135628.133305Z-c67c824c",
+      "session_id": "20261017T135628.133305Z-c67c824c",
+      "status": "interrupted",
+      "samples": 718,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 359,
+        "depth_samples_written": 359
+      },
+      "canonical_path": "data/archive/sensor_validation/rgb_depth_imu_usb/20261017T135628.133305Z-c67c824c",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rgb_depth_imu_usb/20261017T142243.726260Z-693a24e1",
+      "session_id": "20261017T142243.726260Z-693a24e1",
+      "status": "interrupted",
+      "samples": 1260,
+      "sensor_samples": {
+        "imu_samples_written": 589,
+        "gps_samples_written": 0,
+        "camera_samples_written": 354,
+        "depth_samples_written": 317
+      },
+      "canonical_path": "data/archive/sensor_validation/rgb_depth_imu_usb/20261017T142243.726260Z-693a24e1",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rgb_depth_imu_usb/20261017T142456.596846Z-b0f736b0",
+      "session_id": "20261017T142456.596846Z-b0f736b0",
+      "status": "interrupted",
+      "samples": 2410,
+      "sensor_samples": {
+        "imu_samples_written": 1110,
+        "gps_samples_written": 0,
+        "camera_samples_written": 667,
+        "depth_samples_written": 633
+      },
+      "canonical_path": "data/archive/sensor_validation/rgb_depth_imu_usb/20261017T142456.596846Z-b0f736b0",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rgb_depth_imu_usb/20261017T135543.510290Z-5d1bb1d1",
+      "session_id": "20261017T135543.510290Z-5d1bb1d1",
+      "status": "completed",
+      "samples": 474,
+      "sensor_samples": {
+        "imu_samples_written": 219,
+        "gps_samples_written": 0,
+        "camera_samples_written": 132,
+        "depth_samples_written": 123
+      },
+      "canonical_path": "data/archive/sensor_validation/rgb_depth_imu_usb/20261017T135543.510290Z-5d1bb1d1",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/rgb_depth_imu_usb/20261017T171312.308641Z-78b84928",
+      "session_id": "20261017T171312.308641Z-78b84928",
+      "status": "interrupted",
+      "samples": 2884,
+      "sensor_samples": {
+        "imu_samples_written": 1318,
+        "gps_samples_written": 0,
+        "camera_samples_written": 792,
+        "depth_samples_written": 774
+      },
+      "canonical_path": "data/archive/sensor_validation/rgb_depth_imu_usb/20261017T171312.308641Z-78b84928",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/walking/20261017T183215.982977Z-45b7f9c2",
+      "session_id": "20261017T183215.982977Z-45b7f9c2",
+      "status": "interrupted",
+      "samples": 9387,
+      "sensor_samples": {
+        "imu_samples_written": 4269,
+        "gps_samples_written": 84,
+        "camera_samples_written": 2565,
+        "depth_samples_written": 2469
+      },
+      "canonical_path": "data/sessions/walking/20261017T183215.982977Z-45b7f9c2",
+      "role": "active walking capture"
+    },
+    {
+      "original_path": "data/sessions/slide_30cm/20261017T122557.998465Z-fef96df9",
+      "session_id": "20261017T122557.998465Z-fef96df9",
+      "status": "interrupted",
+      "samples": 2889,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/slide_30cm/20261017T122557.998465Z-fef96df9",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/stand/20261017T103705.799161Z-5e2ee2c0",
+      "session_id": "20261017T103705.799161Z-5e2ee2c0",
+      "status": "completed",
+      "samples": 1383,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/stand/20261017T103705.799161Z-5e2ee2c0",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/side_rotate/20261017T103945.390231Z-ba2c004b",
+      "session_id": "20261017T103945.390231Z-ba2c004b",
+      "status": "completed",
+      "samples": 1352,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/side_rotate/20261017T103945.390231Z-ba2c004b",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/side_rotate/20261017T103927.917737Z-c5d46ebc",
+      "session_id": "20261017T103927.917737Z-c5d46ebc",
+      "status": "interrupted",
+      "samples": 0,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/archive/sensor_validation/side_rotate/20261017T103927.917737Z-c5d46ebc",
+      "role": "archived sensor/calibration evidence"
+    },
+    {
+      "original_path": "data/sessions/walking_textured/20261018T125752.420290Z-028b4e1e",
+      "session_id": "20261018T125752.420290Z-028b4e1e",
+      "status": "interrupted",
+      "samples": 0,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 0,
+        "depth_samples_written": 0
+      },
+      "canonical_path": "data/sessions/walking_textured/20261018T125752.420290Z-028b4e1e",
+      "role": "empty textured-walk attempt",
+      "availability": "Not found at recorded canonical path on 2026-10-18"
+    },
+    {
+      "original_path": "data/sessions/walking_textured/20261018T125813.647700Z-7b9ace2a",
+      "session_id": "20261018T125813.647700Z-7b9ace2a",
+      "status": "interrupted",
+      "samples": 5416,
+      "sensor_samples": {
+        "imu_samples_written": 0,
+        "gps_samples_written": 0,
+        "camera_samples_written": 2794,
+        "depth_samples_written": 2622
+      },
+      "canonical_path": "data/sessions/walking_textured/20261018T125813.647700Z-7b9ace2a",
+      "role": "textured-walk development recording",
+      "availability": "Not found at recorded canonical path on 2026-10-18"
+    },
+    {
+      "original_path": "data/sessions/walking_textured/20261018T131057.054271Z-8e72c47e",
+      "session_id": "20261018T131057.054271Z-8e72c47e",
+      "status": "interrupted",
+      "samples": 7574,
+      "sensor_samples": {
+        "imu_samples_written": 3466,
+        "gps_samples_written": 73,
+        "camera_samples_written": 2080,
+        "depth_samples_written": 1955
+      },
+      "canonical_path": "data/sessions/walking_textured/20261018T131057.054271Z-8e72c47e",
+      "role": "textured-walk recapture with GPS; user reports return to start"
+    }
+  ]
+}

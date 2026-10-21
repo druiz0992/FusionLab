@@ -1,0 +1,49 @@
+// Minimal interoperability schema; not a copy of the upstream implementation.
+// Tags match sensorstream_driver/proto/sensor.proto (see docs/4_sensors_and_acquisition.md).
+syntax = "proto3";
+package fusionlab.sensorstream_wire;
+message Vec3 { float x = 1; float y = 2; float z = 3; }
+message Rotation { float x = 1; float y = 2; float z = 3; float w = 4; }
+message Imu {
+  uint64 timestamp = 1;
+  Vec3 accel = 2;
+  Vec3 gyro = 3;
+  Rotation orientation = 4;
+  string frame_id = 5;
+}
+message FixStatus { int32 status = 1; uint32 service = 2; }
+message Camera {
+  uint64 timestamp = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  string encoding = 4;
+  bytes image_data = 5;
+  string frame_id = 6;
+}
+message Depth {
+  uint64 timestamp = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  string encoding = 4;
+  bytes depth_data = 5;
+  string frame_id = 6;
+}
+message Gps {
+  uint64 timestamp = 1;
+  string frame_id = 2;
+  FixStatus status = 3;
+  double latitude = 4;
+  double longitude = 5;
+  double altitude = 6;
+  repeated double position_covariance = 7;
+  int32 position_covariance_type = 8;
+}
+message Envelope {
+  oneof payload {
+    Imu imu = 1;
+    Camera camera = 2;
+    Depth depth = 3;
+    Gps gps = 4;
+    bytes pointcloud = 5;
+  }
+}

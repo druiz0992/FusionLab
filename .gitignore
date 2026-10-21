@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+data/sessions/*
+!data/sessions/.gitkeep
+# Archived raw/derived data remains local, like active recordings.
+data/archive/
+data/benchmarks/
+data/consolidation_manifest.json
+
+# Editor caches
+.vscode/browse.vc.db*

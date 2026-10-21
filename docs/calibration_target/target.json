@@ -1,0 +1,19 @@
+{
+  "squares": [
+    10,
+    7
+  ],
+  "inner_corners": [
+    9,
+    6
+  ],
+  "nominal_square_mm": 25,
+  "page_mm": [
+    297,
+    210
+  ],
+  "board_mm": [
+    250,
+    175
+  ]
+}
