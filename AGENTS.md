@@ -138,3 +138,16 @@ python3 scripts/restore_data_layout.py --check
 
 End with a brief account of what changed, what was validated (with commands and
 results), and what remains unfinished.
+
+When the session's credit or token budget is about 95% used (or the user says it
+is running low), stop starting new work and hand over so a new session can resume:
+
+1. Finish or cleanly back out the current step; leave no half-applied edits.
+2. Run tests and black (and `scripts/output_parity.sh` for an unfinished
+   refactor); commit and push, stating what was and was not verified.
+3. Update the dated "Unfinished" note in `docs/2_status_and_roadmap.md` with what
+   changed, validation, the blocker and ordered next actions.
+4. Move any helper scripts the next session needs from temporary locations into
+   the repository.
+5. Give the user a ready-to-paste prompt pointing to this file, the docs/2 note
+   and the exact next step.
