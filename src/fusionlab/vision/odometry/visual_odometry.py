@@ -1,6 +1,7 @@
 """Experimental sparse monocular VO. Each reset has independent arbitrary scale."""
 
 from fusionlab.vision.calibrated_motion import estimate_motion
+from fusionlab.vision.odometry.frame_result import FrameResult
 from fusionlab.vision.tracks import TrackFrame
 
 
@@ -443,7 +444,11 @@ class MonocularOdometry:
         ]
         return diagnostics
 
-    def process(self, row: TrackFrame):
+    def process(self, row: TrackFrame) -> FrameResult:
+        """Advance the estimator by one tracking frame."""
+        return FrameResult.from_json(self._process_frame(row))
+
+    def _process_frame(self, row: TrackFrame) -> dict:
         np, cv = self.np, self.cv
         self.last_pnp_snapshot = None
         self.step += 1

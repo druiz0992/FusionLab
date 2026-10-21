@@ -6,6 +6,7 @@ evaluation reports together. Estimation logic lives in visual_odometry.py.
 
 import json
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 
 from fusionlab.evaluation.vo_reports import write_failure_report, write_geometry_report
@@ -51,10 +52,10 @@ def run_odometry(
             for index, row in read_track_frames(tracks):
                 if index % stride:
                     continue
-                result = tracker.process(row)
-                result["frame_index"] = index
-                out.write(json.dumps(result, allow_nan=False) + "\n")
-                counts[result["status"]] = counts.get(result["status"], 0) + 1
+                result = replace(tracker.process(row), frame_index=index)
+                out.write(json.dumps(result.to_json(), allow_nan=False) + "\n")
+                status = result.status.value
+                counts[status] = counts.get(status, 0) + 1
                 processed += 1
                 if replay is not None:
                     replay.publish(row, result, index)

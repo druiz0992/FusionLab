@@ -78,6 +78,7 @@ src/fusionlab/
     calibrated_motion.py               calibrated pair-motion diagnostics
     odometry/
       visual_odometry.py               multiframe estimator (MonocularOdometry)
+      frame_result.py                  typed poses.jsonl records (FrameResult, TrackingStatus)
       runner.py                        runs VO over tracks; writes poses, reports, summary
       landmark_refinement.py           landmark-only optimization
       local_bundle_adjustment.py       joint local pose/landmark optimization

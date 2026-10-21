@@ -1,3 +1,4 @@
+from fusionlab.vision.odometry.frame_result import FrameResult, TrackingStatus
 from fusionlab.vision.tracks import TrackFrame
 import unittest
 from fusionlab.vision.odometry.visual_odometry import MonocularOdometry
@@ -55,31 +56,31 @@ class VisualOdometryTests(unittest.TestCase):
             refined_results.append(refined_vo.process(TrackFrame.from_json(row)))
             keyframe_results.append(keyframe_vo.process(TrackFrame.from_json(row)))
             multiview_results.append(multiview_vo.process(TrackFrame.from_json(row)))
-        self.assertTrue(all(r["status"] == "tracking" for r in multiview_results[1:]))
+        self.assertTrue(all(r.status == "tracking" for r in multiview_results[1:]))
         np.testing.assert_allclose(
-            multiview_results[-1]["camera_center_arbitrary"], [5.0, 0.0, 0.0], atol=0.05
+            multiview_results[-1].camera_center_arbitrary, [5.0, 0.0, 0.0], atol=0.05
         )
-        self.assertTrue(all(r["status"] == "tracking" for r in keyframe_results[1:]))
+        self.assertTrue(all(r.status == "tracking" for r in keyframe_results[1:]))
         np.testing.assert_allclose(
-            keyframe_results[-1]["camera_center_arbitrary"], [5.0, 0.0, 0.0], atol=0.05
+            keyframe_results[-1].camera_center_arbitrary, [5.0, 0.0, 0.0], atol=0.05
         )
-        self.assertTrue(all(r["status"] == "tracking" for r in refined_results[1:]))
+        self.assertTrue(all(r.status == "tracking" for r in refined_results[1:]))
         np.testing.assert_allclose(
-            refined_results[-1]["camera_center_arbitrary"], [5.0, 0.0, 0.0], atol=0.05
+            refined_results[-1].camera_center_arbitrary, [5.0, 0.0, 0.0], atol=0.05
         )
-        self.assertEqual(results[0]["status"], "initializing")
-        self.assertTrue(all(r["status"] == "tracking" for r in results[1:]))
+        self.assertEqual(results[0].status, "initializing")
+        self.assertTrue(all(r.status == "tracking" for r in results[1:]))
         np.testing.assert_allclose(
-            results[-1]["camera_center_arbitrary"], [5.0, 0.0, 0.0], atol=0.05
+            results[-1].camera_center_arbitrary, [5.0, 0.0, 0.0], atol=0.05
         )
         row["tracks"] = []
         row["source_time_ns"] += 100_000_000
         failure = vo.process(TrackFrame.from_json(row))
-        self.assertEqual(failure["status"], "tracking_lost")
-        self.assertEqual(failure["failure_category"], "too_few_visible_landmarks")
-        self.assertFalse(failure["pnp_attempted"])
-        self.assertEqual(failure["visible_landmarks"], 0)
-        self.assertGreater(failure["landmarks_before"], 0)
+        self.assertEqual(failure.status, "tracking_lost")
+        self.assertEqual(failure.failure_category, "too_few_visible_landmarks")
+        self.assertFalse(failure.diagnostics["pnp_attempted"])
+        self.assertEqual(failure.diagnostics["visible_landmarks"], 0)
+        self.assertGreater(failure.diagnostics["landmarks_before"], 0)
         import json
         import tempfile
         from pathlib import Path
@@ -87,11 +88,14 @@ class VisualOdometryTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            all_rows = results + [failure]
-            for index, result in enumerate(all_rows):
-                result["frame_index"] = index
+            from dataclasses import replace
+
+            all_rows = [
+                replace(result, frame_index=index)
+                for index, result in enumerate(results + [failure])
+            ]
             (output / "poses.jsonl").write_text(
-                "".join(json.dumps(r) + "\n" for r in all_rows)
+                "".join(json.dumps(r.to_json()) + "\n" for r in all_rows)
             )
             report = write_failure_report(output)
             self.assertEqual(report["failure_count"], 1)
@@ -166,13 +170,9 @@ class VisualOdometryTests(unittest.TestCase):
             "received_monotonic_ns": 0,
             "tracks": [],
         }
-        self.assertEqual(
-            vo.process(TrackFrame.from_json(row))["status"], "initializing"
-        )
+        self.assertEqual(vo.process(TrackFrame.from_json(row)).status, "initializing")
         row["source_time_ns"] = 100_000_000
-        self.assertEqual(
-            vo.process(TrackFrame.from_json(row))["status"], "initializing"
-        )
+        self.assertEqual(vo.process(TrackFrame.from_json(row)).status, "initializing")
         self.assertIsNone(vo.pose)
 
     def test_replay_video_and_path_reset_share_timeline(self):
@@ -209,12 +209,14 @@ class VisualOdometryTests(unittest.TestCase):
                     )
                     replay.publish(
                         row,
-                        {
-                            "status": status,
-                            "segment": segment,
-                            "landmarks": 25,
-                            "camera_center_arbitrary": [float(i + 1), 0.0, 0.0],
-                        },
+                        FrameResult(
+                            source_time_ns=row.source_time_ns,
+                            received_monotonic_ns=row.received_monotonic_ns,
+                            segment=segment,
+                            status=TrackingStatus(status),
+                            diagnostics={"landmarks": 25},
+                            camera_center_arbitrary=[float(i + 1), 0.0, 0.0],
+                        ),
                         i,
                     )
             values = [value for _, value in read_log(root / "log")]

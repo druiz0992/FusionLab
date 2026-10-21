@@ -3,6 +3,7 @@
 Presentation only: nothing here feeds back into estimation.
 """
 
+from fusionlab.vision.odometry.frame_result import FrameResult, TrackingStatus
 from fusionlab.vision.tracks import TrackFrame
 
 
@@ -36,7 +37,7 @@ class OdometryReplay:
             ),
         )
 
-    def publish(self, row: TrackFrame, result, index):
+    def publish(self, row: TrackFrame, result: FrameResult, index):
         import cv2
         import numpy as np
         from fusion_viewer import SampleTime, Trajectory2D, ScalarSample, ImageSample
@@ -46,13 +47,14 @@ class OdometryReplay:
         stamp = SampleTime(
             "vo_replay", "receive", row.received_monotonic_ns - self.origin
         )
-        status = result["status"]
-        segment = result["segment"]
-        if status == "tracking":
+        status = result.status
+        segment = result.segment
+        diagnostics = result.diagnostics
+        if status == TrackingStatus.TRACKING:
             if segment != self.active_segment:
                 self.path = [(0.0, 0.0)]
                 self.active_segment = segment
-            center = result["camera_center_arbitrary"]
+            center = result.camera_center_arbitrary
             self.path.append((center[0], center[2]))
         else:
             # Do not leave the last successful pose looking current during loss.
@@ -74,13 +76,13 @@ class OdometryReplay:
                 "state",
             ),
             ("segment", segment, "segment"),
-            ("landmarks", result.get("landmarks", 0), "landmarks"),
-            ("pnp_inliers", result.get("pnp_inliers", 0), "inliers"),
-            ("visible_landmarks", result.get("visible_landmarks", 0), "landmarks"),
-            ("landmarks_added", result.get("landmarks_added", 0), "landmarks"),
+            ("landmarks", diagnostics.get("landmarks", 0), "landmarks"),
+            ("pnp_inliers", diagnostics.get("pnp_inliers", 0), "inliers"),
+            ("visible_landmarks", diagnostics.get("visible_landmarks", 0), "landmarks"),
+            ("landmarks_added", diagnostics.get("landmarks_added", 0), "landmarks"),
             (
                 "landmarks_no_longer_visible",
-                result.get("landmarks_no_longer_visible", 0),
+                diagnostics.get("landmarks_no_longer_visible", 0),
                 "landmarks",
             ),
         ):
@@ -96,7 +98,7 @@ class OdometryReplay:
             "pnp_median_inlier_error_px",
             "refined_median_inlier_error_px",
         ):
-            value = result.get(key)
+            value = diagnostics.get(key)
             if value is not None:
                 self.viewer.publish(
                     self.run,
@@ -133,7 +135,7 @@ class OdometryReplay:
         )
         cv2.putText(
             banner,
-            f"Segment {segment} | {result.get('landmarks',0)} landmarks",
+            f"Segment {segment} | {diagnostics.get('landmarks',0)} landmarks",
             (8, 44),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,

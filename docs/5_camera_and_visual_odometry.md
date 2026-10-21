@@ -159,6 +159,11 @@ The viewer shows an initial-camera XZ projection, not a gravity-aligned floor pl
 Each segment has its own unknown scale. Pixel residuals use the mean tracking
 focal length to express normalized-coordinate errors approximately in pixels.
 
+`MonocularOdometry.process` returns a `FrameResult`
+(`fusionlab.vision.odometry.frame_result`): status, segment, timing and pose are
+typed fields; PnP, triangulation, keyframe and BA details are in its ordered
+`diagnostics` dict. Each `poses.jsonl` row is its flat `to_json()` form.
+
 `two-view` (uncalibrated pair geometry) and `camera-motion` (calibrated pair
 rotation and translation direction) are standalone two-frame diagnostics that
 share the same tracks.

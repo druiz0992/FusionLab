@@ -144,7 +144,10 @@ class MotionDiagnosticTests(unittest.TestCase):
                 "".join(json.dumps(r) + "\n" for r in rows)
             )
             results = [
-                {**tracker.process(TrackFrame.from_json(row)), "frame_index": i}
+                {
+                    **tracker.process(TrackFrame.from_json(row)).to_json(),
+                    "frame_index": i,
+                }
                 for i, row in enumerate(rows)
             ]
             (run / "poses.jsonl").write_text(

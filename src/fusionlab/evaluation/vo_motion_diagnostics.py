@@ -256,12 +256,12 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
             result = tracker.process(row)
             old = saved[index]
             if (
-                result["status"] != old["status"]
-                or result["segment"] != old["segment"]
+                result.status != old["status"]
+                or result.segment != old["segment"]
                 or (
-                    result["status"] == "tracking"
+                    result.status == "tracking"
                     and not np.allclose(
-                        result["world_to_camera"],
+                        result.world_to_camera,
                         old["world_to_camera"],
                         atol=1e-8,
                         rtol=1e-8,
@@ -273,22 +273,22 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
                 origin = row.received_monotonic_ns
             item = {
                 "frame_index": index,
-                "status": result["status"],
-                "segment": result["segment"],
+                "status": result.status,
+                "segment": result.segment,
                 "receive_elapsed_s": (row.received_monotonic_ns - origin) / 1e9,
                 "source_time_ns": row.source_time_ns,
-                "failure_category": result.get("failure_category"),
+                "failure_category": result.failure_category,
                 "overlay_path": row.overlay_path,
             }
             if history and (
-                history[-1]["segment"] != result["segment"]
+                history[-1]["segment"] != result.segment
                 or not 0 < row.source_time_ns - history[-1]["time"] <= 500_000_000
             ):
                 history = []
             snapshot = tracker.last_pnp_snapshot
             candidate = (
-                np.asarray(result["world_to_camera"])
-                if result["status"] == "tracking"
+                np.asarray(result.world_to_camera)
+                if result.status == "tracking"
                 else (snapshot.get("candidate_pose") if snapshot else None)
             )
             prediction = predict_constant_velocity(history, row.source_time_ns)
@@ -309,7 +309,7 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
                     )
                     item["pnp_pose_kind"] = (
                         "accepted online pose after optional BA"
-                        if result["status"] == "tracking"
+                        if result.status == "tracking"
                         else "rejected raw RANSAC candidate"
                     )
                 if prediction is not None:
@@ -380,12 +380,12 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
                 )
             report_file.write(json.dumps(item, allow_nan=False) + "\n")
             rows.append(item)
-            if result["status"] == "tracking":
+            if result.status == "tracking":
                 history.append(
                     {
                         "pose": candidate.copy(),
                         "time": row.source_time_ns,
-                        "segment": result["segment"],
+                        "segment": result.segment,
                     }
                 )
                 history = history[-2:]
