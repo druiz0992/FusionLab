@@ -191,6 +191,19 @@ velocity prediction and gyro. It can take minutes with BA. `--imu-offset-ms` shi
 camera timestamps when indexing IMU; `--camera-from-imu FILE` supplies a JSON 3×3
 rotation for full-axis comparison (otherwise only rotation magnitudes are compared).
 
+```bash
+fusionlab diagnose-map "$CURRENT/local_ba" --tracks "$TRACKS" --calibration "$CALIBRATION" \
+  --reference-states "$WALK/analysis/runs/orbslam3_fullrate_640/states.csv" \
+  --output-dir "$WALK/analysis/runs/map_diagnostics_new"
+```
+
+`diagnose-map` reads a saved run (no replay) and reports, per loss, visible tracks
+versus mapped landmarks, triangulation outcomes, the inferred reference-keyframe age,
+the parallax each track offers against its first observation, and recent-versus-older
+landmark errors at geometric losses. `--tracks`/`--calibration` override the paths
+saved in the run (older runs record historical paths); `--reference-states` adds the
+ORB-SLAM3 state at each loss.
+
 ### Benchmark against ground truth (EuRoC)
 
 ```bash

@@ -13,6 +13,7 @@ from fusionlab.vision.odometry.policies import (
     POSE_ACCEPTANCE,
     lookup,
 )
+from fusionlab.vision.rays import track_rays
 from fusionlab.vision.tracks import TrackFrame
 
 # Frames further apart than this (source clock) start a new segment.
@@ -172,35 +173,8 @@ class MonocularOdometry:
         self.last_pnp_snapshot = None
 
     def _normalized(self, row: TrackFrame):
-        """Undistort track pixels into normalized camera rays, keyed by track ID.
-
-        Calibration is in original stored pixels; tracks are in resized tracking
-        pixels, so K is scaled per axis before undistortion.
-        """
-        np, cv = self.np, self.cv
-        if row.original_size != tuple(self.calibration["image_size"]):
-            raise ValueError("Calibration and original image dimensions differ")
-        if self.calibration.get("distortion_order") != ["k1", "k2", "p1", "p2", "k3"]:
-            raise ValueError("Unsupported distortion model")
-        scale = np.asarray(row.tracking_size) / np.asarray(row.original_size)
-        if not np.allclose(scale, row.pixel_scale_xy):
-            raise ValueError("Inconsistent tracking pixel scale")
-        camera = np.diag([*scale, 1.0]) @ np.asarray(self.calibration["camera_matrix"])
-        identifiers = [track.id for track in row.tracks]
-        pixels = np.asarray([track.xy for track in row.tracks], dtype=float).reshape(
-            -1, 2
-        )
-        if not np.isfinite(pixels).all():
-            raise ValueError("Nonfinite track coordinates")
-        if len(pixels):
-            normalized = cv.undistortPoints(
-                pixels.reshape(-1, 1, 2),
-                camera,
-                np.asarray(self.calibration["distortion_coefficients"]),
-            ).reshape(-1, 2)
-        else:
-            normalized = np.empty((0, 2))
-        return dict(zip(identifiers, normalized)), camera
+        """Undistorted rays keyed by track ID, and the tracking-pixel K."""
+        return track_rays(row, self.calibration)
 
     # -- Triangulation --------------------------------------------------------
 

@@ -203,7 +203,7 @@ selected-window updates still fail the current-map guard.
 ### Diagnostics versus estimator inputs
 
 Constant-velocity prediction, spatial coverage and gyro comparison (`diagnose-vo`)
-are offline diagnostics. They do not constrain VO or change its acceptance rules.
+and map-maintenance statistics (`diagnose-map`) are offline diagnostics. They do not constrain VO or change its acceptance rules.
 Predictions use source-time intervals and reset across discontinuities. All pose
 hypotheses are evaluated on the same pre-update map. Accepted post-BA poses may fit
 a changed map, so those diagnostic counts need not equal original acceptance counts.

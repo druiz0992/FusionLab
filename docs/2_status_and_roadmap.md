@@ -37,7 +37,7 @@ Independent IMU experiments and gyro diagnostic plots do not constitute fusion.
 | ID | Limitation | Work already attempted | Remaining action |
 | --- | --- | --- | --- |
 | L1 | Frequent geometric disagreement and losses | Failure diagnostics; pose acceptance A/B; keyframe-policy A/B | Validate against calibrated ground-truth data and an established baseline; inspect high-risk frames |
-| L2 | Fragile two-view depth and map quality | Third-view validation, landmark-only refinement and ablation | Joint-map consistency and stronger observation management; improvement is not depth ground truth |
+| L2 | Fragile two-view depth and map quality | Third-view validation, landmark-only refinement and ablation; map-maintenance diagnosis (2026-10-21): narrow reference baselines starve the map | Per-track triangulation against each track's first observation; parallax keyframes validated on ground truth; improvement is not depth ground truth |
 | L3 | Local BA improves selected subset but often harms full-map support | Robust sparse local BA; explicit anchors; reject degrading updates | Reconcile local objective and full-map constraints; do not simply remove guard |
 | L4 | Translation jumps and ambiguous CV innovations | Common-map pose comparisons, spatial coverage and ranked image reports | Review weak-support/rotation-disagreement events; test on separate recordings |
 | L5 | Sensor calibration/timing uncertainty | RGB checkerboard fit; empirical depth units; gyro magnitude checks | Independent RGB validation; camera–IMU extrinsics/timing; RGB–depth registration |
@@ -123,8 +123,15 @@ experiment results.
 
 1. Establish a calibrated ground-truth benchmark and a credible reference method
    before accumulating more phone-specific tweaks.
-2. Use the existing diagnostic report to investigate spatially weak support,
-   rotation disagreements and selected-window/full-map inconsistency.
+2. Map maintenance (diagnosed 2026-10-21, [results](3_experiment_results.md#map-maintenance-at-full-rate)):
+   losses are mostly map starvation from 1–2-frame triangulation baselines while
+   usable parallax goes unused. Next action: add per-track triangulation (each
+   track triangulated against its own first observation once its angle passes
+   the gate) as an opt-in landmark variant; compare it with baseline and
+   `parallax` keyframes at full rate on both walks with `diagnose-map` and the
+   ORB timeline. Candidates after that: bootstrap hysteresis for single-frame
+   segments in hard windows, and culling/re-refining drifting older landmarks.
+   `parallax` keyframes stay a candidate until EuRoC shows accuracy.
 3. Validate on a separate recording. Gate any new default on continuity, geometric
    consistency, failures and independent accuracy, not only fewer resets.
 4. Proceed to depth assistance or IMU fusion after their geometry/time assumptions

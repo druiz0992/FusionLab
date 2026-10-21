@@ -78,6 +78,7 @@ src/fusionlab/
     calibration_validation.py          scoring fixed intrinsics on a separate capture
     feature_tracking.py                image correspondences and overlays
     tracks.py                          typed tracks.jsonl records (TrackFrame) and readers
+    rays.py                            undistorted track rays, tracking-pixel K
     two_view.py                        uncalibrated pair geometry
     calibrated_motion.py               calibrated pair-motion diagnostics
     odometry/
@@ -92,6 +93,7 @@ src/fusionlab/
     vo_evaluation.py                   saved-run metrics and jump inspection
     vo_reports.py                      failure and geometry audit reports for a VO run
     vo_motion_diagnostics.py           common-map, CV, spatial and gyro analysis
+    map_maintenance.py                 landmark creation, reference age, parallax use
   visualization/
     visualization_adapter.py           exports to fusion_viewer messages
     odometry_replay.py                 VO video/status/segment-path viewer replay

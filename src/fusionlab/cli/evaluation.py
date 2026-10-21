@@ -24,6 +24,27 @@ def register(commands) -> None:
     )
     diagnose.set_defaults(handler=run_diagnose_vo)
 
+    mapping = commands.add_parser(
+        "diagnose-map",
+        help="Landmark creation, reference age and parallax use of a saved VO run",
+    )
+    mapping.add_argument("run_dir", type=Path)
+    mapping.add_argument("--output-dir", type=Path, required=True)
+    mapping.add_argument(
+        "--tracks", type=Path, help="Override the tracks.jsonl path saved in the run"
+    )
+    mapping.add_argument(
+        "--calibration",
+        type=Path,
+        help="Override the calibration path saved in the run",
+    )
+    mapping.add_argument(
+        "--reference-states",
+        type=Path,
+        help="ORB-SLAM3 states.csv to report its state at each FusionLab loss",
+    )
+    mapping.set_defaults(handler=run_diagnose_map)
+
     evaluate = commands.add_parser(
         "evaluate-trajectory", help="Score segmented VO against imported ground truth"
     )
@@ -49,6 +70,25 @@ def run_diagnose_vo(args: argparse.Namespace) -> None:
         imu_offset_ms=args.imu_offset_ms,
     )
     print(json.dumps(report, indent=2))
+
+
+def run_diagnose_map(args: argparse.Namespace) -> None:
+    from fusionlab.evaluation.map_maintenance import diagnose_map
+
+    report = diagnose_map(
+        args.run_dir,
+        args.output_dir,
+        tracks=args.tracks,
+        calibration=args.calibration,
+        reference_states=args.reference_states,
+    )
+    # Per-loss rows stay in summary.json; print the aggregate sections.
+    print(
+        json.dumps(
+            {k: v for k, v in report.items() if k not in ("geometric_losses",)},
+            indent=2,
+        )
+    )
 
 
 def run_evaluate_trajectory(args: argparse.Namespace) -> None:

@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from fusionlab.vision.tracks import TrackFrame
 
-from support.vision import calibration_json, track_row
+from support.vision import calibration_json, track_row, translating_camera_rows
 from support import require
 
 # Synthetic camera: 1280×720 pixels, no distortion, 9×6 inner corners of 20 mm.
@@ -448,3 +448,72 @@ class MotionDiagnosticTests(unittest.TestCase):
             self.assertEqual(summary["frames_with_cv"], 0)
             self.assertEqual(summary["gyro_intervals"], 0)
             self.assertTrue((root / "report/index.html").exists())
+
+
+class DiagnoseMapIntegrationTests(unittest.TestCase):
+    """Run VO on a synthetic scene, then `fusionlab diagnose-map` on the saved run."""
+
+    def setUp(self):
+        require("cv2", "numpy", "scipy")
+
+    def run_cli(self, *arguments: str) -> dict:
+        from fusionlab.cli import main
+
+        with patch("sys.argv", ["fusionlab", "diagnose-map", *arguments]):
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                main()
+        return json.loads(stdout.getvalue())
+
+    def test_reports_map_and_parallax_for_a_saved_run(self):
+        from fusionlab.vision.odometry.runner import run_odometry
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracks = root / "tracks.jsonl"
+            rows = translating_camera_rows(8)
+            tracks.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            calibration = root / "calibration.json"
+            calibration.write_text(json.dumps(calibration_json()))
+            run_odometry(tracks, calibration, root / "vo", stride=1)
+
+            printed = self.run_cli(str(root / "vo"), "--output-dir", str(root / "map"))
+
+            summary = json.loads((root / "map/summary.json").read_text())
+            self.assertTrue((root / "map/report.md").read_text().startswith("# Map"))
+        self.assertEqual(printed["status_counts"], summary["status_counts"])
+        self.assertEqual(summary["loss_context"]["losses"], 0)
+        # Every track is visible from bootstrap on, so all 200 are counted once.
+        self.assertEqual(summary["available_parallax"]["tracks"], 200)
+        # The camera moves 0.25 units per frame past points 4-8 units away, so
+        # most tracks pass 2 degrees against their first view within the run.
+        self.assertGreater(
+            summary["available_parallax"]["reach"]["2"]["track_share"], 0.5
+        )
+        self.assertEqual(summary["configuration"]["keyframe_policy"], "baseline")
+        self.assertIsNotNone(summary["reference_age"])
+
+    def test_refuses_an_existing_output_directory(self):
+        from fusionlab.cli import main
+        from fusionlab.vision.odometry.runner import run_odometry
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracks = root / "tracks.jsonl"
+            rows = translating_camera_rows(3)
+            tracks.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            calibration = root / "calibration.json"
+            calibration.write_text(json.dumps(calibration_json()))
+            run_odometry(tracks, calibration, root / "vo", stride=1)
+            (root / "map").mkdir()
+            argv = [
+                "fusionlab",
+                "diagnose-map",
+                str(root / "vo"),
+                "--output-dir",
+                str(root / "map"),
+            ]
+            with patch("sys.argv", argv):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as exit_info:
+                        main()
+        self.assertEqual(exit_info.exception.code, 1)

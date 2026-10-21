@@ -88,6 +88,54 @@ and every-third-frame schedule have different physical time horizons at full rat
 This motivates a focused landmark/map-maintenance investigation without claiming
 an isolated cause or better independent accuracy. [Full-rate results and timeline](../data/sessions/walking_textured/20261018T131057.054271Z-8e72c47e/analysis/comparisons/monocular/README.md#fusionlab-full-rate-experiment).
 
+## Map maintenance at full rate
+
+Investigated 2026-10-21 with `fusionlab diagnose-map` on both walks: same tracks,
+calibration, refinement + BA, seed 0; ORB-SLAM3 full-rate states for the overlap.
+The original walk's full-rate FusionLab runs were new. Development data only.
+
+| Walk | Stride | Keyframes | Tracked | Losses | Losses while ORB tracked | Longest span |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| Textured | 5 | baseline | 87.5% | 21 | 19 | 7.00 s |
+| Textured | 1 | baseline | 94.0% | 22 | 11 | 17.50 s |
+| Textured | 1 | **parallax** | 94.7% | 15 | 4 | 29.63 s |
+| Original | 5 | baseline | 86.9% | 29 | 7 | 10.83 s |
+| Original | 1 | baseline | 95.4% | 19 | 6 | 15.41 s |
+| Original | 1 | **parallax** | 95.7% | 12 | 5 | 15.41 s |
+
+What the diagnostics show (medians per frame unless stated):
+
+- **The frontend is not starving.** About 400 tracks are visible at nearly every
+  loss (lowest 91, original walk); only 3–9% of them are mapped then, and 27–37%
+  while tracking.
+- **Baseline keyframes triangulate over almost no baseline at full rate.** The
+  reference moves whenever a frame adds a landmark, so it is 1–2 frames old;
+  90–93% of candidates fail the 1° parallax gate and 88–89% of admitted angles
+  are below 2°. Stride five hides this by spanning five camera frames.
+- **Usable parallax is left unused.** On the textured walk 256 visible tracks
+  already have ≥ 2° against their own first observation while 109 are mapped;
+  40% of tracks reach 2° (typically within 4 frames). The original walk offers
+  far less (12% of tracks), consistent with most of its losses also being ORB
+  losses.
+- **Losses are mostly map starvation.** At full rate 16–18 of 19–22 losses are
+  too few visible mapped landmarks, with the count collapsing over 5–10 frames
+  while about 300 candidates per frame are rejected for parallax.
+- **Older narrow-baseline landmarks drift.** At 13/14 stride-five geometric losses
+  on the textured walk, older landmarks fit the candidate pose much worse than
+  recent ones (typically 4–14 px, up to 100 px, versus 1–4 px).
+- **Hard windows cause reinitialization loops.** Nine single-frame segments on
+  the textured walk sit in 52.6–55.6 s, ORB's one "recently lost" window; the
+  keyframe policy does not change them.
+
+**Parallax keyframes at full rate** (an existing variant, previously tested only at
+stride five) reduce losses on both walks (22→15, 19→12), remove the geometric-loss
+category, raise mapped landmarks while tracking (109→137, 108→156) and lower
+low-parallax rejections (0.90→0.47, 0.93→0.55). This is a continuity gain on
+development data, not demonstrated accuracy. **Retained as a candidate; not a
+default.** Angles use the runs' own estimated rotations (gyro agreement about
+0.5°). Reports: [textured](../data/sessions/walking_textured/20261018T131057.054271Z-8e72c47e/analysis/comparisons/map_maintenance/README.md),
+[original](../data/sessions/walking/20261017T183215.982977Z-45b7f9c2/analysis/comparisons/map_maintenance/README.md).
+
 ## Where to inspect the evidence
 
 Subsequent inspection found nearly featureless walls at several ORB loss windows
