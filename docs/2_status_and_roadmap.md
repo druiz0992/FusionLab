@@ -114,8 +114,10 @@ No estimator defaults were changed. Independent trajectory accuracy remains unva
 timestamp-associated ground-truth evaluation are implemented and tested on
 generated fixtures ([workflow](7_benchmarking.md)). The real MH_01_easy run is
 blocked on dataset access: the legacy download host timed out and the current ETH
-archive returned a rate-limit page. `data/benchmarks/euroc/` was still absent on
-2026-10-21. Next action: obtain the extracted sequence, run the two documented
+archive returned a rate-limit page. On 2026-10-21 the legacy host still timed out
+and the ETH Research Collection (via the dataset DOI) returned HTTP 429 to automated
+requests, so `data/benchmarks/euroc/` is still absent. The dataset must be downloaded
+in a browser. Next action: obtain the extracted sequence, run the two documented
 configurations and record coverage, losses and per-segment aligned errors in the
 experiment results.
 
