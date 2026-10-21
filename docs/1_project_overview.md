@@ -61,7 +61,11 @@ Component details: [4. Sensors and acquisition](4_sensors_and_acquisition.md),
 
 ```text
 src/fusionlab/
-  __init__.py, __main__.py, cli.py       package and command entry points
+  __init__.py, __main__.py            package entry (`python -m fusionlab`)
+  cli/                               `fusionlab` commands, one module per group below
+    __init__.py                        parser assembly and dispatch (main)
+    _common.py                         shared JSON printing and viewer-sink helpers
+    recordings.py, inertial.py, vision.py, visualization.py, evaluation.py
   recordings/
     replay.py                          recorded IMU reading and timed replay
     euroc.py                           EuRoC cam0/calibration/ground-truth import
@@ -105,7 +109,8 @@ Other top-level folders:
 | `data/sessions/` | Active captures and selected RGB calibration |
 | `data/archive/` | Older sensor captures and superseded calibration attempts |
 
-The CLI delegates to these packages. Evaluation may replay an estimator to inspect
+The CLI delegates to these packages: each `cli/` module registers its
+subcommands with a handler, so a new command is added next to its group. Evaluation may replay an estimator to inspect
 its state; its diagnostic hypotheses do not feed estimator acceptance.
 Visualization adapters understand FusionLab outputs, while `fusion_viewer` stays
 independent. Optional numerical/rendering dependencies are loaded lazily.
