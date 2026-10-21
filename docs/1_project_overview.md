@@ -73,6 +73,7 @@ src/fusionlab/
     calibration.py                     checkerboard target and intrinsic fitting
     calibration_validation.py          scoring fixed intrinsics on a separate capture
     feature_tracking.py                image correspondences and overlays
+    tracks.py                          typed tracks.jsonl records (TrackFrame) and readers
     two_view.py                        uncalibrated pair geometry
     calibrated_motion.py               calibrated pair-motion diagnostics
     odometry/

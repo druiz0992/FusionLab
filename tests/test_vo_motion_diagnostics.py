@@ -1,3 +1,4 @@
+from fusionlab.vision.tracks import TrackFrame
 import unittest
 
 from fusionlab.evaluation.vo_motion_diagnostics import (
@@ -143,7 +144,8 @@ class MotionDiagnosticTests(unittest.TestCase):
                 "".join(json.dumps(r) + "\n" for r in rows)
             )
             results = [
-                {**tracker.process(row), "frame_index": i} for i, row in enumerate(rows)
+                {**tracker.process(TrackFrame.from_json(row)), "frame_index": i}
+                for i, row in enumerate(rows)
             ]
             (run / "poses.jsonl").write_text(
                 "".join(json.dumps(r) + "\n" for r in results)

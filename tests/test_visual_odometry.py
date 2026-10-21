@@ -1,3 +1,4 @@
+from fusionlab.vision.tracks import TrackFrame
 import unittest
 from fusionlab.vision.odometry.visual_odometry import MonocularOdometry
 
@@ -50,10 +51,10 @@ class VisualOdometryTests(unittest.TestCase):
                     for j, p in enumerate(pixels.reshape(-1, 2))
                 ],
             }
-            results.append(vo.process(row))
-            refined_results.append(refined_vo.process(row))
-            keyframe_results.append(keyframe_vo.process(row))
-            multiview_results.append(multiview_vo.process(row))
+            results.append(vo.process(TrackFrame.from_json(row)))
+            refined_results.append(refined_vo.process(TrackFrame.from_json(row)))
+            keyframe_results.append(keyframe_vo.process(TrackFrame.from_json(row)))
+            multiview_results.append(multiview_vo.process(TrackFrame.from_json(row)))
         self.assertTrue(all(r["status"] == "tracking" for r in multiview_results[1:]))
         np.testing.assert_allclose(
             multiview_results[-1]["camera_center_arbitrary"], [5.0, 0.0, 0.0], atol=0.05
@@ -73,7 +74,7 @@ class VisualOdometryTests(unittest.TestCase):
         )
         row["tracks"] = []
         row["source_time_ns"] += 100_000_000
-        failure = vo.process(row)
+        failure = vo.process(TrackFrame.from_json(row))
         self.assertEqual(failure["status"], "tracking_lost")
         self.assertEqual(failure["failure_category"], "too_few_visible_landmarks")
         self.assertFalse(failure["pnp_attempted"])
@@ -165,9 +166,13 @@ class VisualOdometryTests(unittest.TestCase):
             "received_monotonic_ns": 0,
             "tracks": [],
         }
-        self.assertEqual(vo.process(row)["status"], "initializing")
+        self.assertEqual(
+            vo.process(TrackFrame.from_json(row))["status"], "initializing"
+        )
         row["source_time_ns"] = 100_000_000
-        self.assertEqual(vo.process(row)["status"], "initializing")
+        self.assertEqual(
+            vo.process(TrackFrame.from_json(row))["status"], "initializing"
+        )
         self.assertIsNone(vo.pose)
 
     def test_replay_video_and_path_reset_share_timeline(self):
@@ -191,10 +196,17 @@ class VisualOdometryTests(unittest.TestCase):
                         ("tracking", 2),
                     )
                 ):
-                    row = {
-                        "received_monotonic_ns": i * 100_000_000,
-                        "overlay_path": "frame.jpg",
-                    }
+                    row = TrackFrame(
+                        source_time_ns=i * 100_000_000,
+                        received_monotonic_ns=i * 100_000_000,
+                        stream_id="s",
+                        segment=segment,
+                        original_size=(120, 160),
+                        tracking_size=(120, 160),
+                        pixel_scale_xy=(1.0, 1.0),
+                        tracks=(),
+                        overlay_path="frame.jpg",
+                    )
                     replay.publish(
                         row,
                         {

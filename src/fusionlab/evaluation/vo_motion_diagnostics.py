@@ -6,6 +6,8 @@ import json
 import shutil
 from pathlib import Path
 
+from fusionlab.vision.tracks import TrackFrame
+
 
 def rotation_angle(rotation):
     import numpy as np
@@ -246,8 +248,8 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
         for index, line in enumerate(file):
             if index not in saved:
                 continue
-            row = json.loads(line)
-            geometry = (row["stream_id"], row["segment"], tuple(row["tracking_size"]))
+            row = TrackFrame.from_json(json.loads(line))
+            geometry = row.geometry_key
             if geometry != last_geometry:
                 history = []
             last_geometry = geometry
@@ -268,19 +270,19 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
             ):
                 mismatches.append(index)
             if origin is None:
-                origin = row["received_monotonic_ns"]
+                origin = row.received_monotonic_ns
             item = {
                 "frame_index": index,
                 "status": result["status"],
                 "segment": result["segment"],
-                "receive_elapsed_s": (row["received_monotonic_ns"] - origin) / 1e9,
-                "source_time_ns": row["source_time_ns"],
+                "receive_elapsed_s": (row.received_monotonic_ns - origin) / 1e9,
+                "source_time_ns": row.source_time_ns,
                 "failure_category": result.get("failure_category"),
-                "overlay_path": row.get("overlay_path"),
+                "overlay_path": row.overlay_path,
             }
             if history and (
                 history[-1]["segment"] != result["segment"]
-                or not 0 < row["source_time_ns"] - history[-1]["time"] <= 500_000_000
+                or not 0 < row.source_time_ns - history[-1]["time"] <= 500_000_000
             ):
                 history = []
             snapshot = tracker.last_pnp_snapshot
@@ -289,21 +291,21 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
                 if result["status"] == "tracking"
                 else (snapshot.get("candidate_pose") if snapshot else None)
             )
-            prediction = predict_constant_velocity(history, row["source_time_ns"])
+            prediction = predict_constant_velocity(history, row.source_time_ns)
             if snapshot is not None:
-                lookup = {t["id"]: t["xy"] for t in row["tracks"]}
+                lookup = row.positions()
                 pixels = np.array(
                     [lookup[key] for key in snapshot["ids"]], dtype=float
                 ).reshape(-1, 2)
                 item["candidate_spatial"] = spatial_distribution(
-                    pixels, row["tracking_size"]
+                    pixels, row.tracking_size
                 )
                 item["map_basis"] = (
                     "Pre-update 3D landmarks, shared by all hypotheses. Accepted online poses may include BA corrections; these support counts need not equal the estimator acceptance counts."
                 )
                 if candidate is not None:
                     item["pnp"] = evaluate_pose(
-                        candidate, snapshot, pixels, row["tracking_size"]
+                        candidate, snapshot, pixels, row.tracking_size
                     )
                     item["pnp_pose_kind"] = (
                         "accepted online pose after optional BA"
@@ -312,7 +314,7 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
                     )
                 if prediction is not None:
                     item["constant_velocity"] = evaluate_pose(
-                        prediction, snapshot, pixels, row["tracking_size"]
+                        prediction, snapshot, pixels, row.tracking_size
                     )
                     item["predicted_center_arbitrary"] = (
                         -prediction[:, :3].T @ prediction[:, 3]
@@ -350,14 +352,14 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
                             )
                         )
                         item["cv_translation_with_pnp_rotation"] = evaluate_pose(
-                            translation_only, snapshot, pixels, row["tracking_size"]
+                            translation_only, snapshot, pixels, row.tracking_size
                         )
             if history and candidate is not None:
                 session = cameras.get(
                     (
-                        row["stream_id"],
-                        row["source_time_ns"],
-                        row["received_monotonic_ns"],
+                        row.stream_id,
+                        row.source_time_ns,
+                        row.received_monotonic_ns,
                     )
                 )
                 streams = [
@@ -368,7 +370,7 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
                     gyro_interval(
                         streams[0],
                         history[-1]["time"],
-                        row["source_time_ns"],
+                        row.source_time_ns,
                         camera_from_imu=camera_from_imu,
                         visual_rotation=visual,
                         offset_ns=round(imu_offset_ms * 1e6),
@@ -382,7 +384,7 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
                 history.append(
                     {
                         "pose": candidate.copy(),
-                        "time": row["source_time_ns"],
+                        "time": row.source_time_ns,
                         "segment": result["segment"],
                     }
                 )

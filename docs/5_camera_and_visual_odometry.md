@@ -131,6 +131,8 @@ Coordinates refer to the resized, **unrotated** image, with +X right and +Y down
 also records the display rotation and overlay path, so an overlay click needs its
 display rotation undone before comparing it with saved coordinates.
 `summary.json` records settings and aggregate counts; `overlays/` holds JPEGs.
+In code, rows are read and written as typed `TrackFrame` records
+(`fusionlab.vision.tracks`); use `read_track_frames` rather than parsing JSON directly.
 
 The output is a set of image correspondences, not a camera trajectory. Objects,
 lighting changes, blur and occlusion all affect tracks; high track counts alone

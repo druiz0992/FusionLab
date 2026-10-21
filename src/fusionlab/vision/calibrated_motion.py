@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+from fusionlab.vision.tracks import read_track_frame_pair
+
 
 def estimate_motion(
     points_a,
@@ -124,41 +126,30 @@ def analyze_motion(
     """Load one tracking pair, scale calibration to tracking pixels, save diagnostics."""
     import numpy as np
 
-    if frame_a < 0 or frame_b <= frame_a:
-        raise ValueError("Frame indices must satisfy 0 <= frame-a < frame-b")
-    selected = {}
-    with tracks.open() as file:
-        for index, line in enumerate(file):
-            if index in (frame_a, frame_b):
-                selected[index] = json.loads(line)
-            if index >= frame_b:
-                break
-    if len(selected) != 2:
-        raise ValueError("Frame index exceeds tracking output")
-    a, b = selected[frame_a], selected[frame_b]
-    for key in (
+    a, b = read_track_frame_pair(tracks, frame_a, frame_b)
+    pair_geometry = (
         "stream_id",
         "segment",
         "tracking_size",
         "original_size",
         "pixel_scale_xy",
-    ):
-        if a[key] != b[key]:
-            raise ValueError("Pair must share stream, segment and image geometry")
+    )
+    if any(getattr(a, key) != getattr(b, key) for key in pair_geometry):
+        raise ValueError("Pair must share stream, segment and image geometry")
     calibration_data = json.loads(calibration.read_text())
-    if calibration_data["image_size"] != a["original_size"]:
+    if tuple(calibration_data["image_size"]) != a.original_size:
         raise ValueError("Calibration image dimensions do not match original capture")
     if calibration_data.get("distortion_order") != ["k1", "k2", "p1", "p2", "k3"]:
         raise ValueError("Unsupported calibration distortion model")
     camera = np.asarray(calibration_data["camera_matrix"], dtype=float)
     # Track coordinates are resized, not display-rotated. Scale each image axis.
-    sx, sy = a["pixel_scale_xy"]
-    expected = np.asarray(a["tracking_size"]) / np.asarray(a["original_size"])
+    sx, sy = a.pixel_scale_xy
+    expected = np.asarray(a.tracking_size) / np.asarray(a.original_size)
     if not np.allclose([sx, sy], expected):
         raise ValueError("Inconsistent tracking coordinate scale")
     camera = np.diag([sx, sy, 1.0]) @ camera
-    first = {track["id"]: track["xy"] for track in a["tracks"]}
-    second = {track["id"]: track["xy"] for track in b["tracks"]}
+    first = a.positions()
+    second = b.positions()
     shared = sorted(first.keys() & second.keys())
     report = estimate_motion(
         [first[key] for key in shared],
@@ -170,7 +161,7 @@ def analyze_motion(
         frame_a=frame_a,
         frame_b=frame_b,
         track_ids=shared,
-        source_interval_s=(b["source_time_ns"] - a["source_time_ns"]) / 1e9,
+        source_interval_s=(b.source_time_ns - a.source_time_ns) / 1e9,
         tracks=str(tracks.resolve()),
         calibration=str(calibration.resolve()),
         calibration_status=calibration_data.get("status", "unknown"),

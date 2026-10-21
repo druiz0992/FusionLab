@@ -4,6 +4,8 @@ import json
 from hashlib import sha256
 from pathlib import Path
 
+from fusionlab.vision.tracks import read_track_frame_pair
+
 
 def estimate_geometry(points_a, points_b, *, threshold_px=1.5):
     """Fit x_b.T F x_a = 0 and report Sampson residuals in tracking pixels.
@@ -111,28 +113,14 @@ def analyze_pair(
     import cv2
     import numpy as np
 
-    if frame_a < 0 or frame_b <= frame_a:
-        raise ValueError("Frame indices must satisfy 0 <= frame-a < frame-b")
     if display_rotation not in (0, 90, 180, 270):
         raise ValueError("Invalid display rotation")
-    selected = {}
-    with tracks.open() as file:
-        for index, line in enumerate(file):
-            if index in (frame_a, frame_b):
-                selected[index] = json.loads(line)
-            if index >= frame_b:
-                break
-    if len(selected) != 2:
-        raise ValueError("Frame index exceeds tracking output")
-    first, second = selected[frame_a], selected[frame_b]
-    if (first["stream_id"], first["segment"], first["tracking_size"]) != (
-        second["stream_id"],
-        second["segment"],
-        second["tracking_size"],
-    ):
+    first, second = read_track_frame_pair(tracks, frame_a, frame_b)
+    selected = {frame_a: first, frame_b: second}
+    if first.geometry_key != second.geometry_key:
         raise ValueError("Frames must share a stream, segment and tracking dimensions")
-    lookup_a = {p["id"]: p["xy"] for p in first["tracks"]}
-    lookup_b = {p["id"]: p["xy"] for p in second["tracks"]}
+    lookup_a = first.positions()
+    lookup_b = second.positions()
     identifiers = sorted(lookup_a.keys() & lookup_b.keys())
     points_a = np.array([lookup_a[key] for key in identifiers]).reshape(-1, 2)
     points_b = np.array([lookup_b[key] for key in identifiers]).reshape(-1, 2)
@@ -144,9 +132,9 @@ def analyze_pair(
             for index, row in selected.items():
                 if (
                     event["type"] != "CameraSample"
-                    or event["stream_id"] != row["stream_id"]
-                    or event["source_time_ns"] != row["source_time_ns"]
-                    or event["received_monotonic_ns"] != row["received_monotonic_ns"]
+                    or event["stream_id"] != row.stream_id
+                    or event["source_time_ns"] != row.source_time_ns
+                    or event["received_monotonic_ns"] != row.received_monotonic_ns
                 ):
                     continue
                 path = (capture / event["image_path"]).resolve()
@@ -162,7 +150,7 @@ def analyze_pair(
                 if image is None:
                     raise ValueError("Image decode failed")
                 images[index] = cv2.resize(
-                    image, tuple(row["tracking_size"]), interpolation=cv2.INTER_AREA
+                    image, row.tracking_size, interpolation=cv2.INTER_AREA
                 )
             if len(images) == 2:
                 break
@@ -193,8 +181,8 @@ def analyze_pair(
         frame_a=frame_a,
         frame_b=frame_b,
         track_ids=identifiers,
-        source_interval_s=(second["source_time_ns"] - first["source_time_ns"]) / 1e9,
-        tracking_size=first["tracking_size"],
+        source_interval_s=(second.source_time_ns - first.source_time_ns) / 1e9,
+        tracking_size=list(first.tracking_size),
         display_rotation_clockwise_deg=display_rotation,
         coordinate_convention="Unrotated tracking pixels, +X right and +Y down; x_b.T F x_a = 0",
     )

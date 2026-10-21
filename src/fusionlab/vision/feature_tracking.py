@@ -7,6 +7,8 @@ from hashlib import sha256
 from math import isfinite
 from pathlib import Path
 
+from fusionlab.vision.tracks import TrackFrame
+
 
 @dataclass(frozen=True)
 class TrackingConfig:
@@ -353,7 +355,9 @@ def track_capture(
                 overlay = f"overlays/{count:06d}.jpg"
                 (output / overlay).write_bytes(encoded.tobytes())
                 row["overlay_path"] = overlay
-                out.write(json.dumps(row, allow_nan=False) + "\n")
+                # Parsing into the typed record validates the row before writing.
+                frame = TrackFrame.from_json(row)
+                out.write(json.dumps(frame.to_json(), allow_nan=False) + "\n")
                 if viewer:
                     if origin is None:
                         origin = event["received_monotonic_ns"]

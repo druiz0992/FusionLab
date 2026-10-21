@@ -5,6 +5,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from fusionlab.vision.calibrated_motion import estimate_motion
+from fusionlab.vision.tracks import TrackFrame, read_track_frames
 
 
 def refine_pose_support(objects, pixels, rotation, translation, inliers, focal):
@@ -146,20 +147,25 @@ class MonocularOdometry:
         self.triangulation_diagnostics = {}
         self.last_pnp_snapshot = None
 
-    def _normalized(self, row):
+    def _normalized(self, row: TrackFrame):
+        """Undistort track pixels into normalized camera rays, keyed by track ID.
+
+        Calibration is in original stored pixels; tracks are in resized tracking
+        pixels, so K is scaled per axis before undistortion.
+        """
         np, cv = self.np, self.cv
-        if row["original_size"] != self.calibration["image_size"]:
+        if row.original_size != tuple(self.calibration["image_size"]):
             raise ValueError("Calibration and original image dimensions differ")
         if self.calibration.get("distortion_order") != ["k1", "k2", "p1", "p2", "k3"]:
             raise ValueError("Unsupported distortion model")
-        scale = np.asarray(row["tracking_size"]) / np.asarray(row["original_size"])
-        if not np.allclose(scale, row["pixel_scale_xy"]):
+        scale = np.asarray(row.tracking_size) / np.asarray(row.original_size)
+        if not np.allclose(scale, row.pixel_scale_xy):
             raise ValueError("Inconsistent tracking pixel scale")
         camera = np.diag([*scale, 1.0]) @ np.asarray(self.calibration["camera_matrix"])
-        identifiers = [track["id"] for track in row["tracks"]]
-        pixels = np.asarray(
-            [track["xy"] for track in row["tracks"]], dtype=float
-        ).reshape(-1, 2)
+        identifiers = [track.id for track in row.tracks]
+        pixels = np.asarray([track.xy for track in row.tracks], dtype=float).reshape(
+            -1, 2
+        )
         if not np.isfinite(pixels).all():
             raise ValueError("Nonfinite track coordinates")
         if len(pixels):
@@ -337,7 +343,7 @@ class MonocularOdometry:
                     "pose": np.column_stack((np.eye(3), np.zeros(3))),
                     "points": self.anchor[1],
                     "step": None,
-                    "received_monotonic_ns": self.anchor[0]["received_monotonic_ns"],
+                    "received_monotonic_ns": self.anchor[0].received_monotonic_ns,
                 }
             )
         self.bundle_window.append(
@@ -441,13 +447,13 @@ class MonocularOdometry:
         ]
         return diagnostics
 
-    def process(self, row):
+    def process(self, row: TrackFrame):
         np, cv = self.np, self.cv
         self.last_pnp_snapshot = None
         self.step += 1
         points, camera = self._normalized(row)
-        geometry = (row["stream_id"], row["segment"], tuple(row["tracking_size"]))
-        timestamp = row["source_time_ns"]
+        geometry = row.geometry_key
+        timestamp = row.source_time_ns
         reset = geometry != self.geometry or (
             self.previous_time is not None
             and (
@@ -468,7 +474,7 @@ class MonocularOdometry:
             self.confirmed_landmarks = set()
         result = {
             "source_time_ns": timestamp,
-            "received_monotonic_ns": row["received_monotonic_ns"],
+            "received_monotonic_ns": row.received_monotonic_ns,
             "segment": self.segment,
             "status": "initializing",
             "landmarks": len(self.landmarks),
@@ -530,9 +536,9 @@ class MonocularOdometry:
                 return result
             self.segment += 1
             self.reference = (points, self.pose.copy())
-            result["bootstrap_origin_received_monotonic_ns"] = anchor_row[
-                "received_monotonic_ns"
-            ]
+            result["bootstrap_origin_received_monotonic_ns"] = (
+                anchor_row.received_monotonic_ns
+            )
         else:
             shared = sorted(self.landmarks.keys() & points.keys())
             result["pnp_candidates"] = len(shared)
@@ -803,15 +809,15 @@ class OdometryReplay:
             ),
         )
 
-    def publish(self, row, result, index):
+    def publish(self, row: TrackFrame, result, index):
         import cv2
         import numpy as np
         from fusion_viewer import SampleTime, Trajectory2D, ScalarSample, ImageSample
 
         if self.origin is None:
-            self.origin = row["received_monotonic_ns"]
+            self.origin = row.received_monotonic_ns
         stamp = SampleTime(
-            "vo_replay", "receive", row["received_monotonic_ns"] - self.origin
+            "vo_replay", "receive", row.received_monotonic_ns - self.origin
         )
         status = result["status"]
         segment = result["segment"]
@@ -874,7 +880,7 @@ class OdometryReplay:
                         units="px",
                     ),
                 )
-        overlay = row.get("overlay_path")
+        overlay = row.overlay_path
         if not overlay:
             raise ValueError(
                 "Tracking row has no overlay_path; regenerate feature tracking overlays"
@@ -966,11 +972,10 @@ def run_odometry(
         counts = {}
         processed = 0
         replay = OdometryReplay(viewer, tracks) if viewer else None
-        with tracks.open() as file, (output / "poses.jsonl").open("x") as out:
-            for index, line in enumerate(file):
+        with (output / "poses.jsonl").open("x") as out:
+            for index, row in read_track_frames(tracks):
                 if index % stride:
                     continue
-                row = json.loads(line)
                 result = tracker.process(row)
                 result["frame_index"] = index
                 out.write(json.dumps(result, allow_nan=False) + "\n")
