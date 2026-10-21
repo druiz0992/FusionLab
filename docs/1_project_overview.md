@@ -101,7 +101,7 @@ Other top-level folders:
 
 | Location | Responsibility |
 | --- | --- |
-| `tests/` | Unit and integration tests (`test_*.py`, unittest discovery) |
+| `tests/` | `unit/` mirrors `src/`; `integration/` end-to-end paths; `support/` shared fixtures |
 | `examples/` | Synthetic viewer API demonstrations |
 | `benchmarks/` | Local performance experiments and the external ORB-SLAM3 driver; not independent accuracy benchmarks |
 | `scripts/` | Maintenance, including the data-layout audit/restore tool |

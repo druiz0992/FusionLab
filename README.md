@@ -228,14 +228,19 @@ of opening a GUI. The examples are synthetic rendering demos, not algorithms.
 
 ```bash
 python -m pip install -e ".[dev,odometry,viewer,plot,live,benchmark]"
-PYTHONPATH=src python -m unittest discover -s tests -v       # full suite
-PYTHONPATH=src python -m unittest tests.test_visual_odometry -v  # one module
+PYTHONPATH=src python -m unittest discover -s tests -v                    # full suite
+PYTHONPATH=src python -m unittest discover -s tests/unit -t tests         # unit only (fast)
+PYTHONPATH=src python -m unittest discover -s tests/integration -t tests  # integration only
+PYTHONPATH=src python -m unittest discover -s tests -p test_policies.py   # one file
 python -m black --workers 1 src tests examples benchmarks
 python3 scripts/restore_data_layout.py --check               # data layout audit
 ```
 
-Tests are in `tests/test_*.py`. Tests whose optional extras are missing are skipped,
-so install the extras before validating algorithms. Generated Protobuf is excluded
+Unit tests in `tests/unit/` mirror the source tree (`sensor_stream`, `fusionlab`,
+`fusion_viewer`, `benchmarks`); `tests/integration/` covers end-to-end capture,
+pipelines and viewer exports; shared fixtures are in `tests/support/`. Tests whose
+optional extras are missing are skipped, so install the extras before validating
+algorithms. Generated Protobuf is excluded
 from formatting. Passing tests verify controlled behavior on synthetic fixtures;
 they do not establish real-world localization accuracy.
 

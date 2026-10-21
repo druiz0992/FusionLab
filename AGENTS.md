@@ -82,8 +82,15 @@ or historical analysis outputs to get oriented; use [data/README.md](data/README
   generated fixtures).
 - Algorithm changes need tests with known geometry or known ground truth, and a
   regression test for each fixed bug.
-- Tests live in `tests/test_*.py` (unittest discovery). Tests needing optional
-  extras must skip cleanly when they are missing.
+- Layout: `tests/unit/<package>/...` mirrors `src/` (one component, in process,
+  generated inputs; temp files are fine). `tests/integration/` holds tests that
+  cross components or packages: network/USB sources, record → inspect, CLI
+  commands doing real work, multi-stage pipelines and fusionlab → fusion_viewer
+  exports. Name files `test_*.py`.
+- Reuse fixtures from `tests/support/` (`wire`, `imu`, `vision`, `require`)
+  instead of copying builders between test files; never import one test module
+  from another. Optional dependencies go through `require(...)`, which skips
+  cleanly when they are missing.
 - Run the relevant tests for every change, and the full suite for shared
   behavior. Docs-only changes need link/command checks, not estimator tests.
   Run the data audit after any data layout change.
