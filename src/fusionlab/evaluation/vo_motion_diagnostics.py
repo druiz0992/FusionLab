@@ -1,10 +1,22 @@
-"""Offline visual-pose/CV/gyro diagnostics. No estimator acceptance changes."""
+"""Offline visual-pose/CV/gyro diagnostics. No estimator acceptance changes.
+
+`diagnose_run` replays a saved VO run with the same settings, checks that it
+reproduces the saved poses, and at every frame evaluates competing pose
+hypotheses on the SAME pre-update landmark snapshot: the visual (PnP) pose, a
+constant-velocity (CV) prediction from the two previous accepted poses, and CV
+translation with the visual rotation. Where IMU data exist, the visual rotation
+between accepted frames is compared with integrated gyro rotation. Poses are
+world-to-camera in each segment's arbitrary-scale frame.
+"""
+
+from __future__ import annotations
 
 import bisect
 import html
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 from fusionlab.vision.tracks import TrackFrame
 
@@ -40,18 +52,40 @@ FINDINGS_SCOPE = (
 )
 
 
-def rotation_angle(rotation):
+MAP_BASIS = (
+    "Pre-update 3D landmarks, shared by all hypotheses. Accepted online poses may "
+    "include BA corrections; these support counts need not equal the estimator "
+    "acceptance counts."
+)
+
+# Same support gate as the estimator: 3 px, at least 20 inliers and 50%.
+INLIER_THRESHOLD_PX = 3.0
+MIN_SUPPORT_INLIERS = 20
+MIN_SUPPORT_RATIO = 0.5
+# Points must be at least this far in front of the camera to count.
+MIN_DEPTH = 1e-8
+# CV needs two accepted poses at most this far apart, extrapolated at most this far.
+CV_MAX_INTERVAL_S = 0.5
+# History is dropped across source-time steps longer than this (or non-positive).
+HISTORY_MAX_GAP_NS = 500_000_000
+# Gyro integration refuses IMU sample gaps longer than this.
+MAX_IMU_GAP_S = 0.05
+
+
+def rotation_angle(rotation) -> float:
+    """Rotation magnitude in degrees, from trace(R) = 1 + 2 cos(theta)."""
     import numpy as np
 
     return float(np.degrees(np.arccos(np.clip((np.trace(rotation) - 1) / 2, -1, 1))))
 
 
-def predict_constant_velocity(history, timestamp_ns):
+def predict_constant_velocity(history: list[dict[str, Any]], timestamp_ns: int):
     """Extrapolate camera center and SO(3) motion using source-time intervals.
 
     history contains two accepted states from ONE contiguous segment. Calling
     code resets it at loss, initialization, source-time discontinuity or stream
-    changes. Predictions never feed back into the estimator.
+    changes. Predictions never feed back into the estimator. Returns a 3×4
+    world-to-camera pose, or None when no valid prediction exists.
     """
     import cv2
     import numpy as np
@@ -63,19 +97,25 @@ def predict_constant_velocity(history, timestamp_ns):
         return None
     dt = (last["time"] - first["time"]) / 1e9
     horizon = (timestamp_ns - last["time"]) / 1e9
-    if dt <= 0 or horizon <= 0 or max(dt, horizon) > 0.5:
+    if dt <= 0 or horizon <= 0 or max(dt, horizon) > CV_MAX_INTERVAL_S:
         return None
     ratio = horizon / dt
     poses = [np.asarray(state["pose"]) for state in (first, last)]
     centers = [-pose[:, :3].T @ pose[:, 3] for pose in poses]
     center = centers[1] + (centers[1] - centers[0]) * ratio
+    # Scale the last rotation increment (as a rotation vector) to the horizon.
     increment = cv2.Rodrigues(poses[1][:, :3] @ poses[0][:, :3].T)[0]
     rotation = cv2.Rodrigues(increment * ratio)[0] @ poses[1][:, :3]
     return np.column_stack((rotation, -rotation @ center))
 
 
-def spatial_distribution(pixels, size):
-    """Coverage and clustering in original tracking pixels, independent of pose."""
+def spatial_distribution(pixels, size) -> dict[str, Any]:
+    """Coverage and clustering in original tracking pixels, independent of pose.
+
+    Reports occupied cells of a 4×4 grid, the convex hull as a fraction of the
+    image, and the minor/major PCA eigenvalue ratio of normalized coordinates
+    (near 0 means points lie along a line).
+    """
     import cv2
     import numpy as np
 
@@ -111,12 +151,16 @@ def spatial_distribution(pixels, size):
     }
 
 
-def evaluate_pose(pose, snapshot, pixels, size):
-    """Identical pre-update landmarks and gates for every pose hypothesis."""
+def evaluate_pose(pose, snapshot: dict[str, Any], pixels, size) -> dict[str, Any]:
+    """Identical pre-update landmarks and gates for every pose hypothesis.
+
+    Reprojection errors are normalized-coordinate errors times the mean tracking
+    focal length (approximate pixels); depth quantiles are in segment units.
+    """
     import numpy as np
 
     camera = snapshot["objects"] @ pose[:, :3].T + pose[:, 3]
-    valid = (camera[:, 2] > 1e-8) & np.isfinite(camera).all(axis=1)
+    valid = (camera[:, 2] > MIN_DEPTH) & np.isfinite(camera).all(axis=1)
     focal = float((snapshot["camera"][0, 0] + snapshot["camera"][1, 1]) / 2)
     errors = np.full(len(camera), np.inf)
     errors[valid] = (
@@ -126,7 +170,7 @@ def evaluate_pose(pose, snapshot, pixels, size):
         )
         * focal
     )
-    inliers = valid & (errors <= 3.0)
+    inliers = valid & (errors <= INLIER_THRESHOLD_PX)
     finite = errors[np.isfinite(errors)]
     depths = camera[inliers, 2]
     return {
@@ -147,20 +191,20 @@ def evaluate_pose(pose, snapshot, pixels, size):
 
 
 def gyro_interval(
-    samples,
-    start_ns,
-    end_ns,
+    samples: list[dict[str, Any]],
+    start_ns: int,
+    end_ns: int,
     *,
     camera_from_imu=None,
     visual_rotation=None,
-    offset_ns=0,
-):
+    offset_ns: int = 0,
+) -> dict[str, Any]:
     """Midpoint gyro integration with interpolated endpoints on source timestamps.
 
     Offset is added to camera times to index IMU time. Without extrinsics, only
     rotation magnitudes can be compared. Exact clock alignment is NOT established.
+    Gyro rates are assumed to be rad/s in the IMU body frame.
     """
-    import cv2
     import numpy as np
 
     start_ns += offset_ns
@@ -176,7 +220,7 @@ def gyro_interval(
         return {"status": "no_bracketing_imu"}
     rows = samples[left : right + 1]
     intervals = np.diff([sample["source_time_ns"] for sample in rows]) / 1e9
-    if len(rows) < 2 or (intervals <= 0).any() or (intervals > 0.05).any():
+    if len(rows) < 2 or (intervals <= 0).any() or (intervals > MAX_IMU_GAP_S).any():
         return {"status": "imu_gap_or_regression"}
     relative_times = np.array(
         [row["source_time_ns"] - start_ns for row in rows], dtype=float
@@ -184,20 +228,7 @@ def gyro_interval(
     rates = np.array([row["angular_velocity"] for row in rows], dtype=float)
     if not np.isfinite(rates).all():
         return {"status": "nonfinite_gyro"}
-    knots = (
-        [0]
-        + [int(t) for t in relative_times if 0 < t < end_ns - start_ns]
-        + [end_ns - start_ns]
-    )
-    interpolated = np.column_stack(
-        [np.interp(knots, relative_times, rates[:, axis]) for axis in range(3)]
-    )
-    body_start_from_end = np.eye(3)
-    for i, dt in enumerate(np.diff(knots) / 1e9):
-        body_start_from_end = (
-            body_start_from_end
-            @ cv2.Rodrigues(0.5 * (interpolated[i] + interpolated[i + 1]) * dt)[0]
-        )
+    body_start_from_end = _integrate_gyro(relative_times, rates, end_ns - start_ns)
     report = {
         "status": "available_assuming_source_clock_alignment",
         "gyro_angle_deg": rotation_angle(body_start_from_end),
@@ -221,209 +252,61 @@ def gyro_interval(
     return report
 
 
-def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_ms=0.0):
-    """Reproduce a saved estimator run to access pre-update landmark snapshots."""
+def _integrate_gyro(relative_times, rates, duration_ns: int):
+    """Compose midpoint rotations over the interval, with interpolated endpoints."""
     import cv2
     import numpy as np
-    from fusionlab.vision.odometry.visual_odometry import MonocularOdometry
+
+    knots = (
+        [0] + [int(t) for t in relative_times if 0 < t < duration_ns] + [duration_ns]
+    )
+    interpolated = np.column_stack(
+        [np.interp(knots, relative_times, rates[:, axis]) for axis in range(3)]
+    )
+    body_start_from_end = np.eye(3)
+    for i, dt in enumerate(np.diff(knots) / 1e9):
+        body_start_from_end = (
+            body_start_from_end
+            @ cv2.Rodrigues(0.5 * (interpolated[i] + interpolated[i + 1]) * dt)[0]
+        )
+    return body_start_from_end
+
+
+class _ReplayContext:
+    """Inputs shared by every frame of a diagnostic replay."""
+
+    def __init__(self, imu, camera_sessions, camera_from_imu, offset_ns: int):
+        self.imu = imu  # (session, stream) -> IMU events
+        self.camera_sessions = camera_sessions  # (stream, source, receive) -> session
+        self.camera_from_imu = camera_from_imu  # 3×3 or None
+        self.offset_ns = offset_ns
+
+
+def diagnose_run(
+    run_dir: Path,
+    capture: Path,
+    output: Path,
+    *,
+    camera_from_imu=None,
+    imu_offset_ms: float = 0.0,
+) -> dict[str, Any]:
+    """Reproduce a saved estimator run to access pre-update landmark snapshots."""
+    import numpy as np
     from fusionlab.evaluation.vo_evaluation import inspect_translation_jumps
 
     if not np.isfinite(imu_offset_ms):
         raise ValueError("IMU offset must be finite")
-    if camera_from_imu is not None:
-        camera_from_imu = np.asarray(camera_from_imu, dtype=float)
-        if (
-            camera_from_imu.shape != (3, 3)
-            or not np.isfinite(camera_from_imu).all()
-            or not np.allclose(
-                camera_from_imu.T @ camera_from_imu, np.eye(3), atol=1e-6
-            )
-            or not np.isclose(np.linalg.det(camera_from_imu), 1.0, atol=1e-6)
-        ):
-            raise ValueError("camera-from-IMU must be a proper 3x3 rotation")
+    camera_from_imu = _checked_camera_from_imu(camera_from_imu)
     config = json.loads((run_dir / "summary.json").read_text())
     tracks = Path(config["tracks"])
-    calibration = Path(config["calibration"])
-    tracker = MonocularOdometry(
-        json.loads(calibration.read_text()),
-        pose_acceptance=config.get("pose_acceptance", "baseline"),
-        keyframe_policy=config.get("keyframe_policy", "baseline"),
-        landmark_policy=config.get("landmark_policy", "baseline"),
-        bundle_adjustment=config.get("bundle_adjustment", False),
-    )
-    cv2.setRNGSeed(config.get("ransac_seed", 0))
-    with (run_dir / "poses.jsonl").open() as file:
-        saved = {r["frame_index"]: r for line in file if (r := json.loads(line))}
-    with (capture / "events.jsonl").open() as file:
-        events = [json.loads(line) for line in file]
-    imu = {}
-    cameras = {}
-    for event in events:
-        if event["type"] == "ImuSample":
-            imu.setdefault((event["session_id"], event["stream_id"]), []).append(event)
-        elif event["type"] == "CameraSample":
-            cameras[
-                (
-                    event["stream_id"],
-                    event["source_time_ns"],
-                    event["received_monotonic_ns"],
-                )
-            ] = event["session_id"]
+    tracker = _rebuild_estimator(config)
+    saved = _saved_results(run_dir)
+    imu, camera_sessions = _index_capture(capture)
     output.mkdir(parents=True, exist_ok=False)
-    history = []
-    last_geometry = None
-    rows = []
-    mismatches = []
-    origin = None
-    with tracks.open() as file, (output / "frames.jsonl").open("x") as report_file:
-        for index, line in enumerate(file):
-            if index not in saved:
-                continue
-            row = TrackFrame.from_json(json.loads(line))
-            geometry = row.geometry_key
-            if geometry != last_geometry:
-                history = []
-            last_geometry = geometry
-            result = tracker.process(row)
-            old = saved[index]
-            if (
-                result.status != old["status"]
-                or result.segment != old["segment"]
-                or (
-                    result.status == "tracking"
-                    and not np.allclose(
-                        result.world_to_camera,
-                        old["world_to_camera"],
-                        atol=1e-8,
-                        rtol=1e-8,
-                    )
-                )
-            ):
-                mismatches.append(index)
-            if origin is None:
-                origin = row.received_monotonic_ns
-            item = {
-                "frame_index": index,
-                "status": result.status,
-                "segment": result.segment,
-                "receive_elapsed_s": (row.received_monotonic_ns - origin) / 1e9,
-                "source_time_ns": row.source_time_ns,
-                "failure_category": result.failure_category,
-                "overlay_path": row.overlay_path,
-            }
-            if history and (
-                history[-1]["segment"] != result.segment
-                or not 0 < row.source_time_ns - history[-1]["time"] <= 500_000_000
-            ):
-                history = []
-            snapshot = tracker.last_pnp_snapshot
-            candidate = (
-                np.asarray(result.world_to_camera)
-                if result.status == "tracking"
-                else (snapshot.get("candidate_pose") if snapshot else None)
-            )
-            prediction = predict_constant_velocity(history, row.source_time_ns)
-            if snapshot is not None:
-                lookup = row.positions()
-                pixels = np.array(
-                    [lookup[key] for key in snapshot["ids"]], dtype=float
-                ).reshape(-1, 2)
-                item["candidate_spatial"] = spatial_distribution(
-                    pixels, row.tracking_size
-                )
-                item["map_basis"] = (
-                    "Pre-update 3D landmarks, shared by all hypotheses. Accepted online poses may include BA corrections; these support counts need not equal the estimator acceptance counts."
-                )
-                if candidate is not None:
-                    item["pnp"] = evaluate_pose(
-                        candidate, snapshot, pixels, row.tracking_size
-                    )
-                    item["pnp_pose_kind"] = (
-                        "accepted online pose after optional BA"
-                        if result.status == "tracking"
-                        else "rejected raw RANSAC candidate"
-                    )
-                if prediction is not None:
-                    item["constant_velocity"] = evaluate_pose(
-                        prediction, snapshot, pixels, row.tracking_size
-                    )
-                    item["predicted_center_arbitrary"] = (
-                        -prediction[:, :3].T @ prediction[:, 3]
-                    ).tolist()
-                    if candidate is not None:
-                        center = -candidate[:, :3].T @ candidate[:, 3]
-                        innovation = float(
-                            np.linalg.norm(
-                                center - np.asarray(item["predicted_center_arbitrary"])
-                            )
-                        )
-                        last_center = (
-                            -history[-1]["pose"][:, :3].T @ history[-1]["pose"][:, 3]
-                        )
-                        expected_step = float(
-                            np.linalg.norm(
-                                np.asarray(item["predicted_center_arbitrary"])
-                                - last_center
-                            )
-                        )
-                        item["translation_innovation_arbitrary"] = innovation
-                        item["innovation_over_predicted_step"] = (
-                            innovation / expected_step if expected_step > 1e-6 else None
-                        )
-                        item["predicted_step_arbitrary"] = expected_step
-                        item["rotation_prediction_error_deg"] = rotation_angle(
-                            candidate[:, :3] @ prediction[:, :3].T
-                        )
-                        # Isolate translation: hold the PnP rotation fixed for both.
-                        translation_only = np.column_stack(
-                            (
-                                candidate[:, :3],
-                                -candidate[:, :3]
-                                @ np.asarray(item["predicted_center_arbitrary"]),
-                            )
-                        )
-                        item["cv_translation_with_pnp_rotation"] = evaluate_pose(
-                            translation_only, snapshot, pixels, row.tracking_size
-                        )
-            if history and candidate is not None:
-                session = cameras.get(
-                    (
-                        row.stream_id,
-                        row.source_time_ns,
-                        row.received_monotonic_ns,
-                    )
-                )
-                streams = [
-                    samples for (sid, _), samples in imu.items() if sid == session
-                ]
-                visual = candidate[:, :3] @ history[-1]["pose"][:, :3].T
-                item["gyro"] = (
-                    gyro_interval(
-                        streams[0],
-                        history[-1]["time"],
-                        row.source_time_ns,
-                        camera_from_imu=camera_from_imu,
-                        visual_rotation=visual,
-                        offset_ns=round(imu_offset_ms * 1e6),
-                    )
-                    if len(streams) == 1
-                    else {"status": "missing_or_ambiguous_session_imu"}
-                )
-            report_file.write(json.dumps(item, allow_nan=False) + "\n")
-            rows.append(item)
-            if result.status == "tracking":
-                history.append(
-                    {
-                        "pose": candidate.copy(),
-                        "time": row.source_time_ns,
-                        "segment": result.segment,
-                    }
-                )
-                history = history[-2:]
-            else:
-                history = []
-            if len(rows) % 100 == 0:
-                print(f"Diagnosed {len(rows)}/{len(saved)} frames", flush=True)
+    context = _ReplayContext(
+        imu, camera_sessions, camera_from_imu, round(imu_offset_ms * 1e6)
+    )
+    rows, mismatches = _replay_frames(tracker, tracks, saved, output, context)
     # Rank CV innovations, but separately flag old step ratios whose denominator
     # can be small during stops. Neither is treated as ground truth.
     innovations = sorted(
@@ -448,26 +331,263 @@ def diagnose_run(run_dir, capture, output, *, camera_from_imu=None, imu_offset_m
         "limits": DIAGNOSTIC_LIMITS,
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    rankings = {
+        "translation_innovations": innovations[:20],
+        "tracking_losses": losses,
+        "segment_step_ratio_flags": inspect_translation_jumps(run_dir, limit=20),
+    }
     (output / "ranked_events.json").write_text(
-        json.dumps(
-            {
-                "translation_innovations": innovations[:20],
-                "tracking_losses": losses,
-                "segment_step_ratio_flags": inspect_translation_jumps(
-                    run_dir, limit=20
-                ),
-            },
-            indent=2,
-            allow_nan=False,
-        )
-        + "\n"
+        json.dumps(rankings, indent=2, allow_nan=False) + "\n"
     )
     _write_html(output, tracks.parent, innovations[:10], losses, summary)
     write_findings(output)
     return summary
 
 
-def _write_html(output, tracks_root, jumps, losses, summary):
+def _checked_camera_from_imu(camera_from_imu):
+    """A proper 3×3 rotation array, or None; never an assumed identity."""
+    import numpy as np
+
+    if camera_from_imu is None:
+        return None
+    camera_from_imu = np.asarray(camera_from_imu, dtype=float)
+    if (
+        camera_from_imu.shape != (3, 3)
+        or not np.isfinite(camera_from_imu).all()
+        or not np.allclose(camera_from_imu.T @ camera_from_imu, np.eye(3), atol=1e-6)
+        or not np.isclose(np.linalg.det(camera_from_imu), 1.0, atol=1e-6)
+    ):
+        raise ValueError("camera-from-IMU must be a proper 3x3 rotation")
+    return camera_from_imu
+
+
+def _rebuild_estimator(config: dict[str, Any]):
+    """A fresh estimator with the saved run's calibration, policies and seed."""
+    import cv2
+    from fusionlab.vision.odometry.visual_odometry import MonocularOdometry
+
+    tracker = MonocularOdometry(
+        json.loads(Path(config["calibration"]).read_text()),
+        pose_acceptance=config.get("pose_acceptance", "baseline"),
+        keyframe_policy=config.get("keyframe_policy", "baseline"),
+        landmark_policy=config.get("landmark_policy", "baseline"),
+        bundle_adjustment=config.get("bundle_adjustment", False),
+    )
+    cv2.setRNGSeed(config.get("ransac_seed", 0))
+    return tracker
+
+
+def _saved_results(run_dir: Path) -> dict[int, dict[str, Any]]:
+    """Saved poses.jsonl rows keyed by frame index."""
+    with (run_dir / "poses.jsonl").open() as file:
+        return {r["frame_index"]: r for line in file if (r := json.loads(line))}
+
+
+def _index_capture(capture: Path):
+    """IMU events per (session, stream) and the session of every camera frame."""
+    with (capture / "events.jsonl").open() as file:
+        events = [json.loads(line) for line in file]
+    imu: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    camera_sessions: dict[tuple[str, int, int], str] = {}
+    for event in events:
+        if event["type"] == "ImuSample":
+            imu.setdefault((event["session_id"], event["stream_id"]), []).append(event)
+        elif event["type"] == "CameraSample":
+            key = (
+                event["stream_id"],
+                event["source_time_ns"],
+                event["received_monotonic_ns"],
+            )
+            camera_sessions[key] = event["session_id"]
+    return imu, camera_sessions
+
+
+def _replay_frames(tracker, tracks: Path, saved, output: Path, context):
+    """Replay saved frames, writing one diagnostic record per frame.
+
+    Returns (records, frame indices whose replay differs from the saved run).
+    """
+    history: list[dict[str, Any]] = []
+    last_geometry = None
+    rows: list[dict[str, Any]] = []
+    mismatches: list[int] = []
+    origin = None
+    with tracks.open() as file, (output / "frames.jsonl").open("x") as report_file:
+        for index, line in enumerate(file):
+            if index not in saved:
+                continue
+            row = TrackFrame.from_json(json.loads(line))
+            if row.geometry_key != last_geometry:
+                history = []
+            last_geometry = row.geometry_key
+            result = tracker.process(row)
+            if not _reproduces(result, saved[index]):
+                mismatches.append(index)
+            if origin is None:
+                origin = row.received_monotonic_ns
+            item = _frame_record(index, row, result, origin)
+            history = _continuous_history(history, result, row)
+            snapshot = tracker.last_pnp_snapshot
+            candidate = _candidate_pose(result, snapshot)
+            prediction = predict_constant_velocity(history, row.source_time_ns)
+            if snapshot is not None:
+                _compare_hypotheses(
+                    item, row, result, snapshot, candidate, prediction, history
+                )
+            if history and candidate is not None:
+                item["gyro"] = _gyro_comparison(context, row, candidate, history)
+            report_file.write(json.dumps(item, allow_nan=False) + "\n")
+            rows.append(item)
+            history = _advance_history(history, result, candidate, row)
+            if len(rows) % 100 == 0:
+                print(f"Diagnosed {len(rows)}/{len(saved)} frames", flush=True)
+    return rows, mismatches
+
+
+def _reproduces(result, saved: dict[str, Any]) -> bool:
+    """Same status and segment, and (when tracking) the same pose to 1e-8."""
+    import numpy as np
+
+    if result.status != saved["status"] or result.segment != saved["segment"]:
+        return False
+    if result.status != "tracking":
+        return True
+    return bool(
+        np.allclose(
+            result.world_to_camera, saved["world_to_camera"], atol=1e-8, rtol=1e-8
+        )
+    )
+
+
+def _frame_record(index: int, row: TrackFrame, result, origin: int) -> dict[str, Any]:
+    """Identity, status and timing fields that start every frame record."""
+    return {
+        "frame_index": index,
+        "status": result.status,
+        "segment": result.segment,
+        "receive_elapsed_s": (row.received_monotonic_ns - origin) / 1e9,
+        "source_time_ns": row.source_time_ns,
+        "failure_category": result.failure_category,
+        "overlay_path": row.overlay_path,
+    }
+
+
+def _continuous_history(history, result, row: TrackFrame):
+    """Drop history across a segment change or a source-time discontinuity."""
+    if history and (
+        history[-1]["segment"] != result.segment
+        or not 0 < row.source_time_ns - history[-1]["time"] <= HISTORY_MAX_GAP_NS
+    ):
+        return []
+    return history
+
+
+def _candidate_pose(result, snapshot):
+    """The accepted pose when tracking, else the raw RANSAC candidate if any."""
+    import numpy as np
+
+    if result.status == "tracking":
+        return np.asarray(result.world_to_camera)
+    return snapshot.get("candidate_pose") if snapshot else None
+
+
+def _compare_hypotheses(item, row, result, snapshot, candidate, prediction, history):
+    """Score PnP, CV and CV-translation hypotheses on the shared snapshot."""
+    import numpy as np
+
+    lookup = row.positions()
+    pixels = np.array([lookup[key] for key in snapshot["ids"]], dtype=float).reshape(
+        -1, 2
+    )
+    item["candidate_spatial"] = spatial_distribution(pixels, row.tracking_size)
+    item["map_basis"] = MAP_BASIS
+    if candidate is not None:
+        item["pnp"] = evaluate_pose(candidate, snapshot, pixels, row.tracking_size)
+        item["pnp_pose_kind"] = (
+            "accepted online pose after optional BA"
+            if result.status == "tracking"
+            else "rejected raw RANSAC candidate"
+        )
+    if prediction is None:
+        return
+    item["constant_velocity"] = evaluate_pose(
+        prediction, snapshot, pixels, row.tracking_size
+    )
+    item["predicted_center_arbitrary"] = (
+        -prediction[:, :3].T @ prediction[:, 3]
+    ).tolist()
+    if candidate is not None:
+        item.update(
+            _innovation(item, candidate, prediction, history, snapshot, pixels, row)
+        )
+
+
+def _innovation(item, candidate, prediction, history, snapshot, pixels, row):
+    """How far the PnP pose departs from the CV prediction.
+
+    The translation innovation is normalized by the predicted step so it is
+    comparable across segments of different arbitrary scale. The last entry
+    holds the PnP rotation fixed to isolate the CV translation's support.
+    """
+    import numpy as np
+
+    predicted_center = np.asarray(item["predicted_center_arbitrary"])
+    center = -candidate[:, :3].T @ candidate[:, 3]
+    innovation = float(np.linalg.norm(center - predicted_center))
+    last_center = -history[-1]["pose"][:, :3].T @ history[-1]["pose"][:, 3]
+    expected_step = float(np.linalg.norm(predicted_center - last_center))
+    translation_only = np.column_stack(
+        (candidate[:, :3], -candidate[:, :3] @ predicted_center)
+    )
+    return {
+        "translation_innovation_arbitrary": innovation,
+        "innovation_over_predicted_step": (
+            innovation / expected_step if expected_step > 1e-6 else None
+        ),
+        "predicted_step_arbitrary": expected_step,
+        "rotation_prediction_error_deg": rotation_angle(
+            candidate[:, :3] @ prediction[:, :3].T
+        ),
+        "cv_translation_with_pnp_rotation": evaluate_pose(
+            translation_only, snapshot, pixels, row.tracking_size
+        ),
+    }
+
+
+def _gyro_comparison(context, row: TrackFrame, candidate, history):
+    """Gyro vs. visual rotation since the previous accepted frame."""
+    session = context.camera_sessions.get(
+        (row.stream_id, row.source_time_ns, row.received_monotonic_ns)
+    )
+    streams = [samples for (sid, _), samples in context.imu.items() if sid == session]
+    if len(streams) != 1:
+        return {"status": "missing_or_ambiguous_session_imu"}
+    visual = candidate[:, :3] @ history[-1]["pose"][:, :3].T
+    return gyro_interval(
+        streams[0],
+        history[-1]["time"],
+        row.source_time_ns,
+        camera_from_imu=context.camera_from_imu,
+        visual_rotation=visual,
+        offset_ns=context.offset_ns,
+    )
+
+
+def _advance_history(history, result, candidate, row: TrackFrame):
+    """Keep the two latest accepted poses; any non-tracking frame clears them."""
+    if result.status != "tracking":
+        return []
+    history.append(
+        {
+            "pose": candidate.copy(),
+            "time": row.source_time_ns,
+            "segment": result.segment,
+        }
+    )
+    return history[-2:]
+
+
+def _write_html(output: Path, tracks_root: Path, jumps, losses, summary) -> None:
     """Self-contained index with local frame images and exact replay timestamps."""
     (output / "frames").mkdir(exist_ok=True)
     body = [
@@ -527,12 +647,40 @@ def _write_html(output, tracks_root, jumps, losses, summary):
     (output / "index.html").write_text("\n".join(body))
 
 
-def write_findings(output):
-    """Summarize observed disagreements; predictions are not ground truth."""
-    from statistics import median
+def write_findings(output: Path) -> dict[str, Any]:
+    """Summarize observed disagreements; predictions are not ground truth.
 
+    Reads `frames.jsonl` from `output` and writes `findings.json`, `findings.md`
+    and, when Matplotlib is available, `motion_checks.png`.
+    """
     with (output / "frames.jsonl").open() as file:
         rows = [json.loads(line) for line in file]
+    findings = _findings(rows)
+    (output / "findings.json").write_text(
+        json.dumps(findings, indent=2, allow_nan=False) + "\n"
+    )
+    (output / "findings.md").write_text(_findings_markdown(findings))
+    try:
+        import numpy  # noqa: F401
+        from matplotlib.figure import Figure  # noqa: F401
+    except ImportError:
+        return findings
+    _plot_motion_checks(rows, output / "motion_checks.png")
+    return findings
+
+
+def _passes_support_gates(metrics: dict[str, Any]) -> bool:
+    """Would this hypothesis pass the estimator's 20-inlier / 50% gates?"""
+    return (
+        metrics.get("inliers_3px", 0) >= MIN_SUPPORT_INLIERS
+        and metrics["inlier_ratio"] >= MIN_SUPPORT_RATIO
+    )
+
+
+def _findings(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Counts comparing visual, CV and gyro evidence over all frames."""
+    from statistics import median
+
     compared = [r for r in rows if "pnp" in r and "constant_velocity" in r]
     gyro = [
         r
@@ -546,10 +694,9 @@ def write_findings(output):
     recovered = [
         r
         for r in losses
-        if r.get("constant_velocity", {}).get("inliers_3px", 0) >= 20
-        and r["constant_velocity"]["inlier_ratio"] >= 0.5
+        if "constant_velocity" in r and _passes_support_gates(r["constant_velocity"])
     ]
-    findings = {
+    return {
         "compared_pose_frames": len(compared),
         "visual_more_inliers": sum(
             r["pnp"]["inliers_3px"] > r["constant_velocity"]["inliers_3px"]
@@ -577,48 +724,49 @@ def write_findings(output):
         ],
         "interpretation": FINDINGS_INTERPRETATION,
     }
-    (output / "findings.json").write_text(
-        json.dumps(findings, indent=2, allow_nan=False) + "\n"
-    )
+
+
+def _findings_markdown(findings: dict[str, Any]) -> str:
+    """Human-readable view of the findings counts plus the method caveats."""
     lines = [
         "# Visual motion diagnostics findings",
         "",
         findings["interpretation"],
         "",
-        f"Comparable visual/CV frames: {len(compared)}.",
-        f"Visual pose has more geometric inliers: {findings['visual_more_inliers']} frames; CV has more: {findings['cv_more_inliers']}.",
-        f"Tracking losses with CV available: {findings['losses_with_cv']}; CV passing the same geometric gates: {len(recovered)}.",
-        f"Median visual/gyro rotation-magnitude difference: {findings['median_gyro_visual_angle_difference_deg']} degrees.",
+        f"Comparable visual/CV frames: {findings['compared_pose_frames']}.",
+        f"Visual pose has more geometric inliers: {findings['visual_more_inliers']} "
+        f"frames; CV has more: {findings['cv_more_inliers']}.",
+        f"Tracking losses with CV available: {findings['losses_with_cv']}; CV passing "
+        f"the same geometric gates: {findings['losses_where_cv_passes_geometric_gates']}.",
+        "Median visual/gyro rotation-magnitude difference: "
+        f"{findings['median_gyro_visual_angle_difference_deg']} degrees.",
         "",
         FINDINGS_OUTPUT_GUIDE,
         "",
         FINDINGS_SCOPE,
     ]
-    (output / "findings.md").write_text("\n".join(lines) + "\n")
-    try:
-        import numpy as np
-        from matplotlib.figure import Figure
-        from matplotlib.backends.backend_agg import FigureCanvasAgg
-    except ImportError:
-        return findings
+    return "\n".join(lines) + "\n"
+
+
+def _plot_motion_checks(rows: list[dict[str, Any]], path: Path) -> None:
+    """Five stacked time series with tracking losses marked in red."""
+    import numpy as np
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    losses = [r for r in rows if r["status"] == "tracking_lost"]
     figure = Figure(figsize=(12, 13))
     FigureCanvasAgg(figure)
     axes = figure.subplots(5, 1, sharex=True)
     times = [r["receive_elapsed_s"] for r in rows]
+
+    def metric(key, name):
+        value = [r.get(key, {}).get(name) for r in rows]
+        return [np.nan if v is None else v for v in value]
+
     for key, label in (("pnp", "Visual pose"), ("constant_velocity", "CV")):
-        for axis, metric in ((axes[0], "inliers_3px"), (axes[1], "median_error_px")):
-            axis.plot(
-                times,
-                [
-                    (
-                        r.get(key, {}).get(metric, np.nan)
-                        if r.get(key, {}).get(metric) is not None
-                        else np.nan
-                    )
-                    for r in rows
-                ],
-                label=label,
-            )
+        axes[0].plot(times, metric(key, "inliers_3px"), label=label)
+        axes[1].plot(times, metric(key, "median_error_px"), label=label)
     axes[1].set_yscale("symlog", linthresh=1.0)
     axes[2].plot(
         times,
@@ -628,16 +776,8 @@ def write_findings(output):
             for r in rows
         ],
     )
-    axes[3].plot(
-        times,
-        [r.get("gyro", {}).get("visual_angle_deg", np.nan) for r in rows],
-        label="Visual",
-    )
-    axes[3].plot(
-        times,
-        [r.get("gyro", {}).get("gyro_angle_deg", np.nan) for r in rows],
-        label="Gyro (assumed timing)",
-    )
+    axes[3].plot(times, metric("gyro", "visual_angle_deg"), label="Visual")
+    axes[3].plot(times, metric("gyro", "gyro_angle_deg"), label="Gyro (assumed timing)")
     axes[4].plot(times, [r.get("innovation_over_predicted_step", np.nan) for r in rows])
     axes[4].set_yscale("symlog", linthresh=1.0)
     for axis, label in zip(
@@ -659,5 +799,4 @@ def write_findings(output):
     axes[-1].set_xlabel("Receive-time playback seconds; red markers = tracking losses")
     figure.suptitle("Diagnostic comparisons only — no prediction or gyro fusion")
     figure.tight_layout()
-    figure.savefig(output / "motion_checks.png", dpi=140)
-    return findings
+    figure.savefig(path, dpi=140)
