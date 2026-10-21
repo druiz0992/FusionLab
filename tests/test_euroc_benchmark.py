@@ -191,13 +191,18 @@ class EurocBenchmarkTests(unittest.TestCase):
                 ).as_matrix()
                 camera = body @ extrinsic
                 scale = 2 if i < 3 else 5
+                # Save poses exactly as VO does: world-to-camera [R | t], 3x4,
+                # with t = -R c for the arbitrary-scale camera center c.
+                center = camera[:3, 3] / scale
+                rotation = camera[:3, :3].T
+                world_to_camera = np.column_stack((rotation, -rotation @ center))
                 records.append(
                     dict(
                         source_time_ns=epoch + i * 10000000 + 5000000,
                         status="tracking",
                         segment=1 if i < 3 else 2,
-                        camera_center_arbitrary=(camera[:3, 3] / scale).tolist(),
-                        world_to_camera=camera[:3, :3].T.tolist(),
+                        camera_center_arbitrary=center.tolist(),
+                        world_to_camera=world_to_camera.tolist(),
                     )
                 )
             (run / "poses.jsonl").write_text(

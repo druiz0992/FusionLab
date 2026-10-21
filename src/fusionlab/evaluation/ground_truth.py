@@ -106,7 +106,9 @@ def evaluate_run(run_dir, groundtruth, output, *, max_gap_ms=50.0):
         errors = np.linalg.norm(aligned - y, axis=1)
         angles = []
         for row, gt in samples:
-            camera_rotation = np.asarray(row["world_to_camera"]).reshape(3, 3).T
+            # VO saves world-to-camera [R | t] (3x4); R.T rotates camera to world.
+            world_to_camera = np.asarray(row["world_to_camera"], dtype=float)
+            camera_rotation = world_to_camera[:, :3].T
             angles.append(
                 float(
                     Rotation.from_matrix(
