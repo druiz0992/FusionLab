@@ -50,7 +50,7 @@ class EurocBenchmarkTests(unittest.TestCase):
     def test_import_tracks_and_odometry_keep_source_and_timestamps(self):
         from fusionlab.recordings.euroc import import_sequence
         from fusionlab.vision.feature_tracking import track_capture
-        from fusionlab.vision.odometry.visual_odometry import run_odometry
+        from fusionlab.vision.odometry.runner import run_odometry
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

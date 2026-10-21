@@ -83,7 +83,7 @@ class VisualOdometryTests(unittest.TestCase):
         import json
         import tempfile
         from pathlib import Path
-        from fusionlab.vision.odometry.visual_odometry import write_failure_report
+        from fusionlab.evaluation.vo_reports import write_failure_report
 
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
@@ -99,7 +99,7 @@ class VisualOdometryTests(unittest.TestCase):
                 report["failure_categories"], {"too_few_visible_landmarks": 1}
             )
             self.assertTrue(report["failures"][0]["preceding_frames"])
-            from fusionlab.vision.odometry.visual_odometry import write_geometry_report
+            from fusionlab.evaluation.vo_reports import write_geometry_report
 
             audit = write_geometry_report(output)
             self.assertEqual(audit["failure_count"], 1)
@@ -178,7 +178,7 @@ class VisualOdometryTests(unittest.TestCase):
     def test_replay_video_and_path_reset_share_timeline(self):
         import tempfile
         from pathlib import Path
-        from fusionlab.vision.odometry.visual_odometry import OdometryReplay
+        from fusionlab.visualization.odometry_replay import OdometryReplay
         from fusion_viewer import ViewerClient, Trajectory2D, ImageSample, ScalarSample
         from fusion_viewer.recording import LogSink, read_log
 

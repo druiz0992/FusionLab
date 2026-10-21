@@ -314,7 +314,7 @@ def main() -> None:
                 )
             )
         elif args.command == "visual-odometry":
-            from fusionlab.vision.odometry.visual_odometry import run_odometry
+            from fusionlab.vision.odometry.runner import run_odometry
 
             factory = None
             if args.viewer or args.rrd:

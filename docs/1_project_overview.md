@@ -77,15 +77,18 @@ src/fusionlab/
     two_view.py                        uncalibrated pair geometry
     calibrated_motion.py               calibrated pair-motion diagnostics
     odometry/
-      visual_odometry.py               multiframe estimator, replay and reports
+      visual_odometry.py               multiframe estimator (MonocularOdometry)
+      runner.py                        runs VO over tracks; writes poses, reports, summary
       landmark_refinement.py           landmark-only optimization
       local_bundle_adjustment.py       joint local pose/landmark optimization
   evaluation/
     ground_truth.py                    timestamp association and segment Sim(3) scoring
     vo_evaluation.py                   saved-run metrics and jump inspection
+    vo_reports.py                      failure and geometry audit reports for a VO run
     vo_motion_diagnostics.py           common-map, CV, spatial and gyro analysis
   visualization/
     visualization_adapter.py           exports to fusion_viewer messages
+    odometry_replay.py                 VO video/status/segment-path viewer replay
 ```
 
 Other top-level folders:
