@@ -151,10 +151,11 @@ class MonocularOdometry:
             LANDMARK_POLICIES, landmark_policy, "landmark policy"
         )
         self.bundle_adjustment = bundle_adjustment
-        import cv2
-        import numpy as np
+        # OpenCV and NumPy are imported where used, keeping them optional at
+        # package import; fail here, at construction, if they are missing.
+        import cv2  # noqa: F401
+        import numpy  # noqa: F401
 
-        self.cv, self.np = cv2, np
         self.calibration = calibration
         self.anchor = None
         self.reference = None
@@ -188,7 +189,8 @@ class MonocularOdometry:
         rays meet at MIN_TRIANGULATION_PARALLAX_DEG or more. Counts per outcome
         are kept in `triangulation_diagnostics`. Returns the candidate count.
         """
-        np = self.np
+        import numpy as np
+
         identifiers = self._triangulation_candidates(points_a, points_b)
         diagnostics = {
             "candidates": len(identifiers),
@@ -251,7 +253,9 @@ class MonocularOdometry:
         mask that is False for points at infinity, behind either camera, or
         nonfinite.
         """
-        np, cv = self.np, self.cv
+        import cv2 as cv
+        import numpy as np
+
         homogeneous = cv.triangulatePoints(pose_a, pose_b, a.T, b.T)
         valid = np.abs(homogeneous[3]) > 1e-10
         points = np.zeros((len(a), 3))
@@ -269,7 +273,8 @@ class MonocularOdometry:
         self, point, camera_a, camera_b, ray_a, ray_b, center_a, center_b, focal
     ):
         """Worst-view reprojection error (approx. px) and ray parallax (deg)."""
-        np = self.np
+        import numpy as np
+
         error_a = np.linalg.norm(camera_a[:2] / camera_a[2] - ray_a)
         error_b = np.linalg.norm(camera_b[:2] / camera_b[2] - ray_b)
         sight_a = point - center_a
@@ -330,7 +335,8 @@ class MonocularOdometry:
             reprojection_errors,
         )
 
-        np = self.np
+        import numpy as np
+
         point = population[key]
         observation = (self.pose.copy(), ray.copy())
         error = reprojection_errors(point, [observation], focal)[0]
@@ -390,7 +396,8 @@ class MonocularOdometry:
         """
         from fusionlab.vision.odometry.local_bundle_adjustment import optimize_window
 
-        np = self.np
+        import numpy as np
+
         self._append_bundle_frame(points)
         window = self.bundle_window
         if len(window) < BA_MIN_WINDOW_FRAMES or self.step % BA_INTERVAL_STEPS:
@@ -437,7 +444,8 @@ class MonocularOdometry:
 
     def _append_bundle_frame(self, points) -> None:
         """Add this frame to the sliding window, seeding it with the anchor."""
-        np = self.np
+        import numpy as np
+
         if not self.bundle_window:
             # The segment's first camera is the world origin with identity pose.
             self.bundle_window.append(
@@ -472,7 +480,8 @@ class MonocularOdometry:
         The selected-window cost can improve while the full current map fits
         worse; that case is rejected (see docs/3_experiment_results.md).
         """
-        np = self.np
+        import numpy as np
+
         shared = sorted(self.landmarks.keys() & points.keys())
         before_count, before_error = self._current_support(
             self.pose, self.landmarks, shared, points, focal
@@ -494,7 +503,8 @@ class MonocularOdometry:
 
     def _current_support(self, pose, landmarks, shared, points, focal):
         """Count landmarks within 3 px in this frame, and the median error."""
-        np = self.np
+        import numpy as np
+
         objects = np.array([landmarks[key] for key in shared])
         camera = objects @ pose[:, :3].T + pose[:, 3]
         errors = np.full(len(shared), np.inf)
@@ -515,7 +525,8 @@ class MonocularOdometry:
         value, so they are updated too. Other historical poses stay fixed; there
         is no marginalization, and saved output poses are never rewritten.
         """
-        np = self.np
+        import numpy as np
+
         for history in self.landmark_observations.values():
             for index, (pose, observed) in enumerate(history):
                 for old, new in zip(poses, new_poses):
@@ -615,7 +626,8 @@ class MonocularOdometry:
         The anchor camera defines the segment's world axes and the bootstrap
         translation defines one arbitrary unit of length.
         """
-        np = self.np
+        import numpy as np
+
         if self.anchor is None:
             self.anchor = (row, points)
             return False
@@ -659,7 +671,8 @@ class MonocularOdometry:
 
     def _estimate_bootstrap_motion(self, anchor_points, points, shared, focal, record):
         """Essential-matrix motion between anchor and current rays, or None."""
-        np = self.np
+        import numpy as np
+
         a = np.array([anchor_points[key] for key in shared])
         b = np.array([points[key] for key in shared])
         # Rays are already undistorted. Express them with a synthetic focal
@@ -698,7 +711,8 @@ class MonocularOdometry:
 
     def _snapshot_map_for_diagnostics(self, shared, points, camera) -> None:
         """Diagnostic-only copy of the SAME map before current-frame updates."""
-        np = self.np
+        import numpy as np
+
         self.last_pnp_snapshot = {
             "ids": shared,
             "objects": np.array([self.landmarks[key] for key in shared]).reshape(-1, 3),
@@ -709,7 +723,9 @@ class MonocularOdometry:
 
     def _solve_pnp_ransac(self, shared, points, focal) -> _PnpCandidate:
         """EPnP RANSAC on normalized rays with a 3-pixel-equivalent threshold."""
-        np, cv = self.np, self.cv
+        import cv2 as cv
+        import numpy as np
+
         pnp = _PnpCandidate()
         if len(shared) < MIN_MAP_CORRESPONDENCES:
             return pnp
@@ -737,7 +753,8 @@ class MonocularOdometry:
         This distinguishes missing 3D correspondences from geometric rejection,
         and splits candidate errors by landmark age (recent: at most 3 steps).
         """
-        np = self.np
+        import numpy as np
+
         record["pnp_attempted"] = len(shared) >= MIN_MAP_CORRESPONDENCES
         record["pnp_solver_success"] = bool(pnp.ok)
         record["pnp_inliers"] = len(pnp.inliers) if pnp.inliers is not None else 0
@@ -772,7 +789,9 @@ class MonocularOdometry:
 
     def _reprojection_errors_px(self, pnp, focal, rotation=None, translation=None):
         """Per-landmark reprojection error, in approximate tracking pixels."""
-        np, cv = self.np, self.cv
+        import cv2 as cv
+        import numpy as np
+
         rotation = pnp.rotation if rotation is None else rotation
         translation = pnp.translation if translation is None else translation
         projected, _ = cv.projectPoints(
@@ -805,7 +824,9 @@ class MonocularOdometry:
         Runs for baseline acceptance on rejected candidates. Copies keep this
         diagnostic from changing the estimator pose.
         """
-        np, cv = self.np, self.cv
+        import cv2 as cv
+        import numpy as np
+
         if not (
             not self.pose_acceptance.refine_before_gates
             and pnp.ok
@@ -867,7 +888,9 @@ class MonocularOdometry:
 
     def _accept_pose(self, pnp, focal, record) -> None:
         """Set the pose (baseline: refine on inliers first) and audit its fit."""
-        np, cv = self.np, self.cv
+        import cv2 as cv
+        import numpy as np
+
         accepted = pnp.inliers.ravel()
         if not self.pose_acceptance.refine_before_gates:
             ok, pnp.rotation, pnp.translation = cv.solvePnP(

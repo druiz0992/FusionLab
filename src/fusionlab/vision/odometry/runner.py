@@ -46,7 +46,10 @@ def run_odometry(
         landmark_policy=landmark_policy,
         bundle_adjustment=bundle_adjustment,
     )
-    tracker.cv.setRNGSeed(seed)
+    import cv2
+
+    # PnP RANSAC draws from OpenCV's global RNG; seed it for reproducible runs.
+    cv2.setRNGSeed(seed)
     output.mkdir(parents=True, exist_ok=False)
     with ExitStack() as resources:
         if viewer_factory is not None:
