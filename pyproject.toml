@@ -11,7 +11,7 @@ dependencies = ["protobuf>=4.21,<7"]
 
 [project.optional-dependencies]
 benchmark = ["PyYAML>=6,<7", "numpy>=1.26", "scipy>=1.11", "opencv-python-headless>=4.6", "matplotlib>=3.6"]
-dev = ["black>=26.10,<27"]
+dev = ["black>=26.10,<27", "mypy>=1.13"]
 plot = ["matplotlib>=3.6"]
 live = ["Pillow>=9"]
 odometry = ["opencv-python-headless>=4.6", "numpy>=1.26", "scipy>=1.11"]
@@ -34,3 +34,18 @@ sensor_stream = ["py.typed", "protocol/proto/*.proto"]
 line-length = 88
 target-version = ["py312"]
 extend-exclude = 'imu_pb2\.py$'
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["sensor_stream", "fusionlab", "fusion_viewer"]
+# OpenCV, SciPy and Rerun ship no type information.
+ignore_missing_imports = true
+# Type-check function bodies even where signatures are not yet annotated.
+check_untyped_defs = true
+
+# OpenCV's bundled stubs reject valid calls (e.g. None for optional outputs);
+# treat it as untyped rather than scatter ignores through the code.
+[[tool.mypy.overrides]]
+module = ["cv2", "cv2.*"]
+follow_imports = "skip"

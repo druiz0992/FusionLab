@@ -246,8 +246,19 @@ PYTHONPATH=src python -m unittest discover -s tests/unit -t tests         # unit
 PYTHONPATH=src python -m unittest discover -s tests/integration -t tests  # integration only
 PYTHONPATH=src python -m unittest discover -s tests -p test_policies.py   # one file
 python -m black --workers 1 src tests examples benchmarks
+python -m mypy src/fusionlab/vision/rays.py                   # type-check (see below)
 python3 scripts/restore_data_layout.py --check               # data layout audit
 ```
+
+mypy is configured in `pyproject.toml` (OpenCV, SciPy and Rerun are treated as
+untyped). The project is not yet clean as a whole (84 errors on 2026-10-21); check
+the modules you change. Array annotations use `fusionlab._typing` aliases imported
+under `TYPE_CHECKING`, so NumPy stays optional at runtime.
+
+For behavior-neutral refactors, `scripts/output_parity.sh REFERENCE_SRC CANDIDATE_SRC
+WORK_DIR` runs tracking, VO policy variants, two-view, camera-motion and diagnose-vo
+on the walking capture with both source trees and compares every output byte for
+byte (reference: a `git worktree add --detach` checkout of the previous commit).
 
 Unit tests in `tests/unit/` mirror the source tree (`sensor_stream`, `fusionlab`,
 `fusion_viewer`, `benchmarks`); `tests/integration/` covers end-to-end capture,
