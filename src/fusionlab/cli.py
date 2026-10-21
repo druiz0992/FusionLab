@@ -7,6 +7,11 @@ from pathlib import Path
 from fusionlab.recordings.replay import read_samples, replay
 from fusionlab.inertial.orientation import integrate, plot, summary
 from fusionlab.inertial.measurements import MeasurementConvention, convert_imu
+from fusionlab.vision.odometry.policies import (
+    KEYFRAME_POLICIES,
+    LANDMARK_POLICIES,
+    POSE_ACCEPTANCE,
+)
 
 
 async def _replay(
@@ -231,14 +236,14 @@ def main() -> None:
     vo.add_argument("--output-dir", type=Path, required=True)
     vo.add_argument("--stride", type=int, default=5)
     vo.add_argument(
-        "--pose-acceptance", choices=("baseline", "refined"), default="baseline"
+        "--pose-acceptance", choices=tuple(POSE_ACCEPTANCE), default="baseline"
     )
     vo.add_argument(
-        "--keyframe-policy", choices=("baseline", "parallax"), default="baseline"
+        "--keyframe-policy", choices=tuple(KEYFRAME_POLICIES), default="baseline"
     )
     vo.add_argument(
         "--landmark-policy",
-        choices=("baseline", "validation", "refinement", "multiview"),
+        choices=tuple(LANDMARK_POLICIES),
         default="baseline",
     )
     vo.add_argument(

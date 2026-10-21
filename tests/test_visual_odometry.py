@@ -128,7 +128,7 @@ class VisualOdometryTests(unittest.TestCase):
         )
 
     def test_keyframe_policy_waits_for_translation_and_preserves_tracks(self):
-        from fusionlab.vision.odometry.visual_odometry import choose_keyframe
+        from fusionlab.vision.odometry.policies import choose_keyframe
 
         np, cv = self.np, self.cv
         reference = {i: np.array([-0.3 + i * 0.02, 0.1 * (i % 2)]) for i in range(30)}

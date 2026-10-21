@@ -164,6 +164,24 @@ focal length to express normalized-coordinate errors approximately in pixels.
 typed fields; PnP, triangulation, keyframe and BA details are in its ordered
 `diagnostics` dict. Each `poses.jsonl` row is its flat `to_json()` form.
 
+### Experimental policy variants
+
+The variants in step 5 live in `fusionlab.vision.odometry.policies`. Each
+registry maps a CLI name to a policy object, and the estimator only asks it
+questions, so `--help` choices come straight from the registries:
+
+| Registry | Variants | What the policy decides |
+| --- | --- | --- |
+| `POSE_ACCEPTANCE` | `baseline`, `refined` | Refine the PnP pose after the support gates (baseline) or before recounting support (refined) |
+| `KEYFRAME_POLICIES` | `baseline`, `parallax` | When to triangulate against the reference keyframe (`decide()`) |
+| `LANDMARK_POLICIES` | `baseline`, `validation`, `refinement`, `multiview` | Two switches: third-view validation of new landmarks, and multiview position refinement (`multiview` = both) |
+
+To add a variant, register a new `PoseAcceptance`/`LandmarkPolicy` entry, or a
+new class with `name`, `explicit` and `decide()` for a keyframe rule. Compare it
+with baseline on common inputs and record the outcome in
+[experiment results](3_experiment_results.md); do not make it a default without
+that evidence.
+
 `two-view` (uncalibrated pair geometry) and `camera-motion` (calibrated pair
 rotation and translation direction) are standalone two-frame diagnostics that
 share the same tracks.

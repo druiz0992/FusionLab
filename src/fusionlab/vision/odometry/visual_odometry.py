@@ -7,6 +7,12 @@ from typing import Any
 
 from fusionlab.vision.calibrated_motion import estimate_motion
 from fusionlab.vision.odometry.frame_result import FrameResult
+from fusionlab.vision.odometry.policies import (
+    KEYFRAME_POLICIES,
+    LANDMARK_POLICIES,
+    POSE_ACCEPTANCE,
+    lookup,
+)
 from fusionlab.vision.tracks import TrackFrame
 
 # Frames further apart than this (source clock) start a new segment.
@@ -80,55 +86,6 @@ def refine_pose_support(objects, pixels, rotation, translation, inliers, focal):
     return True, refined_rotation, refined_translation, support
 
 
-def choose_keyframe(
-    reference_points,
-    reference_pose,
-    current_points,
-    current_pose,
-    *,
-    parallax_deg=2.0,
-    survival_ratio=0.6,
-):
-    """Balance rotation-compensated ray motion against loss of shared tracks.
-
-    This uses observed rays, not estimated landmark depths. Rotation-only motion
-    should not trigger the parallax condition. Low survival refreshes the
-    reference before more tracks disappear, even if depth geometry remains weak.
-    """
-    import numpy as np
-
-    shared = sorted(reference_points.keys() & current_points.keys())
-    survival = len(shared) / len(reference_points) if reference_points else 0.0
-    median_angle = 0.0
-    if shared:
-        a = np.column_stack(
-            ([reference_points[key] for key in shared], np.ones(len(shared)))
-        )
-        b = np.column_stack(
-            ([current_points[key] for key in shared], np.ones(len(shared)))
-        )
-        a /= np.linalg.norm(a, axis=1)[:, None]
-        b /= np.linalg.norm(b, axis=1)[:, None]
-        relative_rotation = current_pose[:, :3] @ reference_pose[:, :3].T
-        cosines = np.sum((a @ relative_rotation.T) * b, axis=1)
-        median_angle = float(np.median(np.degrees(np.arccos(np.clip(cosines, -1, 1)))))
-    if survival < survival_ratio or len(shared) < 20:
-        reason = "track_survival"
-    elif median_angle >= parallax_deg:
-        reason = "parallax"
-    else:
-        reason = "wait_for_baseline"
-    return {
-        "selected": reason != "wait_for_baseline",
-        "reason": reason,
-        "shared_tracks": len(shared),
-        "track_survival_ratio": survival,
-        "median_rotation_compensated_parallax_deg": median_angle,
-        "parallax_threshold_deg": parallax_deg,
-        "survival_threshold": survival_ratio,
-    }
-
-
 class MonocularOdometry:
     """Triangulate persistent feature IDs, then recover world-to-camera poses.
 
@@ -146,16 +103,17 @@ class MonocularOdometry:
         landmark_policy="baseline",
         bundle_adjustment=False,
     ):
-        if pose_acceptance not in ("baseline", "refined"):
-            raise ValueError("Unknown pose acceptance method")
-        if keyframe_policy not in ("baseline", "parallax"):
-            raise ValueError("Unknown keyframe policy")
-        if landmark_policy not in ("baseline", "validation", "refinement", "multiview"):
-            raise ValueError("Unknown landmark policy")
+        # Policies are chosen by name; see policies.py for what each one does.
+        self.pose_acceptance = lookup(
+            POSE_ACCEPTANCE, pose_acceptance, "pose acceptance method"
+        )
+        self.keyframe_policy = lookup(
+            KEYFRAME_POLICIES, keyframe_policy, "keyframe policy"
+        )
+        self.landmark_policy = lookup(
+            LANDMARK_POLICIES, landmark_policy, "landmark policy"
+        )
         self.bundle_adjustment = bundle_adjustment
-        self.landmark_policy = landmark_policy
-        self.keyframe_policy = keyframe_policy
-        self.pose_acceptance = pose_acceptance
         import cv2
         import numpy as np
 
@@ -260,15 +218,12 @@ class MonocularOdometry:
             cosine = ray_a @ ray_b / (np.linalg.norm(ray_a) * np.linalg.norm(ray_b))
             parallax = np.degrees(np.arccos(np.clip(cosine, -1, 1)))
             if max(error_a, error_b) * focal <= 2.0 and parallax >= 1.0:
-                if self.landmark_policy != "baseline":
+                if self.landmark_policy.keeps_observations:
                     self.landmark_observations[key] = [
                         (pose_a.copy(), a[index].copy()),
                         (pose_b.copy(), b[index].copy()),
                     ]
-                if (
-                    self.landmark_policy in ("validation", "multiview")
-                    and not bootstrap
-                ):
+                if self.landmark_policy.validate_third_view and not bootstrap:
                     self.pending_landmarks[key] = point
                 else:
                     self.landmarks[key] = point
@@ -320,7 +275,7 @@ class MonocularOdometry:
                 error = reprojection_errors(point, [observation], focal)[0]
                 if not np.isfinite(error) or error > 3.0:
                     if (
-                        self.landmark_policy in ("validation", "multiview")
+                        self.landmark_policy.validate_third_view
                         and key not in self.confirmed_landmarks
                     ):
                         del population[key]
@@ -333,14 +288,14 @@ class MonocularOdometry:
                     history = [history[0]] + history[-4:]
                 candidate = (
                     refine_landmark(point, history)
-                    if self.landmark_policy in ("refinement", "multiview")
+                    if self.landmark_policy.refine_positions
                     else point.copy()
                 )
                 errors = reprojection_errors(candidate, history, focal)
                 if np.isfinite(errors).all() and errors.max() <= 3.0:
                     self.landmark_observations[key] = history
                     population[key] = candidate
-                    if self.landmark_policy in ("refinement", "multiview"):
+                    if self.landmark_policy.refine_positions:
                         diagnostics["refined"] += 1
                     if key not in self.confirmed_landmarks:
                         self.confirmed_landmarks.add(key)
@@ -629,7 +584,7 @@ class MonocularOdometry:
         self._snapshot_map_for_diagnostics(shared, points, camera)
         pnp = self._solve_pnp_ransac(shared, points, focal)
         self._record_pnp_support(pnp, shared, focal, record)
-        if self.pose_acceptance == "refined" and pnp.ok:
+        if self.pose_acceptance.refine_before_gates and pnp.ok:
             self._refine_before_acceptance(pnp, shared, focal, record)
         if not self._passes_support_gates(pnp, shared):
             self._record_counterfactual_refinement(pnp, shared, focal, record)
@@ -752,7 +707,7 @@ class MonocularOdometry:
         """
         np, cv = self.np, self.cv
         if not (
-            self.pose_acceptance == "baseline"
+            not self.pose_acceptance.refine_before_gates
             and pnp.ok
             and pnp.inliers is not None
             and len(pnp.inliers) >= 6
@@ -814,7 +769,7 @@ class MonocularOdometry:
         """Set the pose (baseline: refine on inliers first) and audit its fit."""
         np, cv = self.np, self.cv
         accepted = pnp.inliers.ravel()
-        if self.pose_acceptance == "baseline":
+        if not self.pose_acceptance.refine_before_gates:
             ok, pnp.rotation, pnp.translation = cv.solvePnP(
                 pnp.objects[accepted],
                 pnp.pixels[accepted],
@@ -851,19 +806,17 @@ class MonocularOdometry:
 
     def _extend_map(self, points, focal, record) -> None:
         """Validate/refine landmarks, triangulate new ones, maybe move keyframe."""
-        if self.landmark_policy != "baseline":
+        if self.landmark_policy.keeps_observations:
             record["multiview_update"] = self._update_landmarks(points, focal)
         # A keyframe must move enough to triangulate new points. Retain the
         # previous keyframe through small motions; replace after replenishing.
         reference_points, reference_pose = self.reference
         old_count = len(self.landmarks)
-        if self.keyframe_policy == "parallax":
-            decision = choose_keyframe(
-                reference_points, reference_pose, points, self.pose
-            )
+        decision = self.keyframe_policy.decide(
+            reference_points, reference_pose, points, self.pose
+        )
+        if self.keyframe_policy.explicit:
             record["keyframe_decision"] = decision
-        else:
-            decision = {"selected": True, "reason": "baseline_try_every_frame"}
         if decision["selected"]:
             self._triangulate(
                 reference_points, reference_pose, points, self.pose, focal
@@ -871,10 +824,10 @@ class MonocularOdometry:
             record["triangulation"] = self.triangulation_diagnostics.copy()
         record["landmarks_added"] = len(self.landmarks) - old_count
         if (
-            (self.keyframe_policy == "parallax" and decision["selected"])
+            (self.keyframe_policy.explicit and decision["selected"])
             or len(self.landmarks) > old_count
             or (
-                self.landmark_policy in ("validation", "multiview")
+                self.landmark_policy.validate_third_view
                 and decision["selected"]
                 and self.triangulation_diagnostics.get("accepted", 0) > 0
             )
