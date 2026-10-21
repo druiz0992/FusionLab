@@ -1,8 +1,39 @@
 """Experimental sparse monocular VO. Each reset has independent arbitrary scale."""
 
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
 from fusionlab.vision.calibrated_motion import estimate_motion
 from fusionlab.vision.odometry.frame_result import FrameResult
 from fusionlab.vision.tracks import TrackFrame
+
+# Frames further apart than this (source clock) start a new segment.
+MAX_FRAME_GAP_NS = 500_000_000
+# Minimum bootstrap tracks, triangulated landmarks, PnP correspondences and inliers.
+MIN_MAP_CORRESPONDENCES = 20
+# PnP inliers must also be at least this share of visible map landmarks.
+MIN_PNP_SUPPORT_RATIO = 0.5
+# Reprojection threshold for PnP support, in approximate tracking pixels.
+PNP_INLIER_THRESHOLD_PX = 3.0
+
+
+@dataclass
+class _PnpCandidate:
+    """A PnP pose hypothesis and the correspondences it was solved from.
+
+    `objects` are map landmarks (segment world frame, arbitrary units) and
+    `pixels` their normalized image rays in this frame. Rotation/translation
+    are OpenCV Rodrigues/translation vectors for world-to-camera.
+    """
+
+    ok: bool = False
+    rotation: Any = None
+    translation: Any = None
+    inliers: Any = None  # (N, 1) indices into objects/pixels
+    objects: Any = None
+    pixels: Any = None
 
 
 def refine_pose_support(objects, pixels, rotation, translation, inliers, focal):
@@ -42,7 +73,9 @@ def refine_pose_support(objects, pixels, rotation, translation, inliers, focal):
         objects @ cv2.Rodrigues(refined_rotation)[0].T + refined_translation.ravel()
     )
     support = np.flatnonzero(
-        np.isfinite(residuals) & (residuals <= 3.0) & (camera[:, 2] > 0)
+        np.isfinite(residuals)
+        & (residuals <= PNP_INLIER_THRESHOLD_PX)
+        & (camera[:, 2] > 0)
     ).reshape(-1, 1)
     return True, refined_rotation, refined_translation, support
 
@@ -445,36 +478,69 @@ class MonocularOdometry:
         return diagnostics
 
     def process(self, row: TrackFrame) -> FrameResult:
-        """Advance the estimator by one tracking frame."""
-        return FrameResult.from_json(self._process_frame(row))
+        """Advance the estimator by one tracking frame.
 
-    def _process_frame(self, row: TrackFrame) -> dict:
-        np, cv = self.np, self.cv
+        Steps, in order:
+        1. Undistort track pixels into normalized rays.
+        2. Reset all map state across stream/segment/size changes or time gaps.
+        3. Without a pose, try to bootstrap a new segment from an anchor frame.
+           With a pose, estimate this frame's pose by PnP against the map and,
+           if it passes the support gates, extend the map.
+        4. Optionally run bounded local bundle adjustment.
+
+        Each step writes its diagnostics into one flat `record` dict, in the
+        order they are produced; that order is the `poses.jsonl` key order.
+        """
         self.last_pnp_snapshot = None
         self.step += 1
         points, camera = self._normalized(row)
-        geometry = row.geometry_key
+        if self._is_discontinuous(row):
+            self._clear_map()
+            self.anchor = None
+            self.reference = None
+        record = self._start_record(row, points)
+        focal = float((camera[0, 0] + camera[1, 1]) / 2)
+        if self.pose is None:
+            tracking = self._bootstrap(row, points, focal, record)
+        else:
+            tracking = self._track_against_map(row, points, camera, focal, record)
+        if tracking:
+            self._finish_tracking_frame(points, focal, record)
+        return FrameResult.from_json(record)
+
+    # -- Segment state ----------------------------------------------------------
+
+    def _is_discontinuous(self, row: TrackFrame) -> bool:
+        """True when this frame cannot continue the previous frame's geometry.
+
+        A different stream, tracker segment or tracking size, a repeated or
+        regressing timestamp, or a gap over MAX_FRAME_GAP_NS all start afresh.
+        """
         timestamp = row.source_time_ns
-        reset = geometry != self.geometry or (
+        discontinuous = row.geometry_key != self.geometry or (
             self.previous_time is not None
             and (
                 timestamp <= self.previous_time
-                or timestamp - self.previous_time > 500_000_000
+                or timestamp - self.previous_time > MAX_FRAME_GAP_NS
             )
         )
-        self.geometry = geometry
+        self.geometry = row.geometry_key
         self.previous_time = timestamp
-        if reset:
-            self.anchor = None
-            self.reference = None
-            self.pose = None
-            self.landmarks = {}
-            self.bundle_window = []
-            self.pending_landmarks = {}
-            self.landmark_observations = {}
-            self.confirmed_landmarks = set()
-        result = {
-            "source_time_ns": timestamp,
+        return discontinuous
+
+    def _clear_map(self) -> None:
+        """Drop the pose and every landmark structure of the current segment."""
+        self.pose = None
+        self.landmarks = {}
+        self.bundle_window = []
+        self.pending_landmarks = {}
+        self.landmark_observations = {}
+        self.confirmed_landmarks = set()
+
+    def _start_record(self, row: TrackFrame, points) -> dict:
+        """Core fields and map counts before this frame changes anything."""
+        return {
+            "source_time_ns": row.source_time_ns,
             "received_monotonic_ns": row.received_monotonic_ns,
             "segment": self.segment,
             "status": "initializing",
@@ -485,296 +551,356 @@ class MonocularOdometry:
             "landmarks_no_longer_visible": len(self.landmarks.keys() - points.keys()),
             "landmarks_added": 0,
         }
-        focal = float((camera[0, 0] + camera[1, 1]) / 2)
-        if self.pose is None:
-            if self.anchor is None:
-                self.anchor = (row, points)
-                return result
-            anchor_row, anchor_points = self.anchor
-            shared = sorted(anchor_points.keys() & points.keys())
-            if len(shared) < 20:
-                self.anchor = (row, points)
-                result["reason"] = "insufficient_bootstrap_tracks"
-                return result
-            a = np.array([anchor_points[key] for key in shared])
-            b = np.array([points[key] for key in shared])
-            # Rays are already undistorted. Express them with a synthetic focal
-            # length only to retain pixel-based RANSAC thresholds in the helper.
-            pseudo_camera = np.diag([focal, focal, 1.0])
-            try:
-                motion = estimate_motion(
-                    a * focal, b * focal, pseudo_camera, np.zeros(5)
-                )
-            except ValueError as error:
-                result["reason"] = str(error)
-                return result
-            if motion["status"] != "accepted_pair":
-                result["reason"] = ",".join(motion["rejection_reasons"])
-                return result
-            self.pose = np.column_stack(
-                (motion["rotation_b_from_a"], motion["translation_b_from_a_unit"])
+
+    # -- Bootstrap ----------------------------------------------------------------
+
+    def _bootstrap(self, row: TrackFrame, points, focal, record) -> bool:
+        """Start a segment from the anchor frame and this one; True on success.
+
+        The anchor camera defines the segment's world axes and the bootstrap
+        translation defines one arbitrary unit of length.
+        """
+        np = self.np
+        if self.anchor is None:
+            self.anchor = (row, points)
+            return False
+        anchor_row, anchor_points = self.anchor
+        shared = sorted(anchor_points.keys() & points.keys())
+        if len(shared) < MIN_MAP_CORRESPONDENCES:
+            self.anchor = (row, points)
+            record["reason"] = "insufficient_bootstrap_tracks"
+            return False
+        motion = self._estimate_bootstrap_motion(
+            anchor_points, points, shared, focal, record
+        )
+        if motion is None:
+            return False
+        self.pose = np.column_stack(
+            (motion["rotation_b_from_a"], motion["translation_b_from_a_unit"])
+        )
+        initial = np.column_stack((np.eye(3), np.zeros(3)))
+        accepted = [key for key, keep in zip(shared, motion["inlier_mask"]) if keep]
+        self._triangulate(
+            {key: anchor_points[key] for key in accepted},
+            initial,
+            {key: points[key] for key in accepted},
+            self.pose,
+            focal,
+            bootstrap=True,
+        )
+        record["triangulation"] = self.triangulation_diagnostics.copy()
+        record["landmarks_added"] = len(self.landmarks)
+        if len(self.landmarks) < MIN_MAP_CORRESPONDENCES:
+            # Keep the anchor: the next frame may have a better baseline.
+            self._clear_map()
+            record["reason"] = "insufficient_triangulated_landmarks"
+            return False
+        self.segment += 1
+        self.reference = (points, self.pose.copy())
+        record["bootstrap_origin_received_monotonic_ns"] = (
+            anchor_row.received_monotonic_ns
+        )
+        return True
+
+    def _estimate_bootstrap_motion(self, anchor_points, points, shared, focal, record):
+        """Essential-matrix motion between anchor and current rays, or None."""
+        np = self.np
+        a = np.array([anchor_points[key] for key in shared])
+        b = np.array([points[key] for key in shared])
+        # Rays are already undistorted. Express them with a synthetic focal
+        # length only to retain pixel-based RANSAC thresholds in the helper.
+        pseudo_camera = np.diag([focal, focal, 1.0])
+        try:
+            motion = estimate_motion(a * focal, b * focal, pseudo_camera, np.zeros(5))
+        except ValueError as error:
+            record["reason"] = str(error)
+            return None
+        if motion["status"] != "accepted_pair":
+            record["reason"] = ",".join(motion["rejection_reasons"])
+            return None
+        return motion
+
+    # -- Tracking against the map ----------------------------------------------
+
+    def _track_against_map(self, row: TrackFrame, points, camera, focal, record):
+        """Estimate this frame's pose by PnP; extend the map. False on loss."""
+        shared = sorted(self.landmarks.keys() & points.keys())
+        record["pnp_candidates"] = len(shared)
+        self._snapshot_map_for_diagnostics(shared, points, camera)
+        pnp = self._solve_pnp_ransac(shared, points, focal)
+        self._record_pnp_support(pnp, shared, focal, record)
+        if self.pose_acceptance == "refined" and pnp.ok:
+            self._refine_before_acceptance(pnp, shared, focal, record)
+        if not self._passes_support_gates(pnp, shared):
+            self._record_counterfactual_refinement(pnp, shared, focal, record)
+            self._lose_tracking(
+                row, points, self._failure_category(pnp, shared), record
             )
-            initial = np.column_stack((np.eye(3), np.zeros(3)))
-            accepted = [key for key, keep in zip(shared, motion["inlier_mask"]) if keep]
-            self._triangulate(
-                {key: anchor_points[key] for key in accepted},
-                initial,
-                {key: points[key] for key in accepted},
-                self.pose,
-                focal,
-                bootstrap=True,
+            return False
+        self._accept_pose(pnp, focal, record)
+        self._extend_map(points, focal, record)
+        return True
+
+    def _snapshot_map_for_diagnostics(self, shared, points, camera) -> None:
+        """Diagnostic-only copy of the SAME map before current-frame updates."""
+        np = self.np
+        self.last_pnp_snapshot = {
+            "ids": shared,
+            "objects": np.array([self.landmarks[key] for key in shared]).reshape(-1, 3),
+            "normalized": np.array([points[key] for key in shared]).reshape(-1, 2),
+            "camera": camera.copy(),
+            "candidate_pose": None,
+        }
+
+    def _solve_pnp_ransac(self, shared, points, focal) -> _PnpCandidate:
+        """EPnP RANSAC on normalized rays with a 3-pixel-equivalent threshold."""
+        np, cv = self.np, self.cv
+        pnp = _PnpCandidate()
+        if len(shared) < MIN_MAP_CORRESPONDENCES:
+            return pnp
+        pnp.objects = np.array([self.landmarks[key] for key in shared])
+        pnp.pixels = np.array([points[key] for key in shared])
+        pnp.ok, pnp.rotation, pnp.translation, pnp.inliers = cv.solvePnPRansac(
+            pnp.objects,
+            pnp.pixels,
+            np.eye(3),
+            None,
+            iterationsCount=100,
+            reprojectionError=PNP_INLIER_THRESHOLD_PX / focal,
+            confidence=0.999,
+            flags=cv.SOLVEPNP_EPNP,
+        )
+        if pnp.ok:
+            self.last_pnp_snapshot["candidate_pose"] = np.column_stack(
+                (cv.Rodrigues(pnp.rotation)[0], pnp.translation.ravel())
             )
-            result["triangulation"] = self.triangulation_diagnostics.copy()
-            result["landmarks_added"] = len(self.landmarks)
-            if len(self.landmarks) < 20:
-                self.pose = None
-                self.landmarks = {}
-                self.bundle_window = []
-                self.pending_landmarks = {}
-                self.landmark_observations = {}
-                self.confirmed_landmarks = set()
-                result["reason"] = "insufficient_triangulated_landmarks"
-                return result
-            self.segment += 1
-            self.reference = (points, self.pose.copy())
-            result["bootstrap_origin_received_monotonic_ns"] = (
-                anchor_row.received_monotonic_ns
+        return pnp
+
+    def _record_pnp_support(self, pnp, shared, focal, record) -> None:
+        """Save solver support before a failure clears the map.
+
+        This distinguishes missing 3D correspondences from geometric rejection,
+        and splits candidate errors by landmark age (recent: at most 3 steps).
+        """
+        np = self.np
+        record["pnp_attempted"] = len(shared) >= MIN_MAP_CORRESPONDENCES
+        record["pnp_solver_success"] = bool(pnp.ok)
+        record["pnp_inliers"] = len(pnp.inliers) if pnp.inliers is not None else 0
+        record["pnp_inlier_ratio"] = (
+            record["pnp_inliers"] / len(shared) if shared else 0.0
+        )
+        if not pnp.ok:
+            return
+        residuals = self._reprojection_errors_px(pnp, focal)
+        finite = residuals[np.isfinite(residuals)]
+        record["pnp_median_candidate_error_px"] = (
+            float(np.median(finite)) if len(finite) else None
+        )
+        ages = np.array(
+            [self.step - self.landmark_birth.get(key, self.step) for key in shared]
+        )
+        for label, selection in (("recent", ages <= 3), ("older", ages > 3)):
+            errors = residuals[selection & np.isfinite(residuals)]
+            record[f"pnp_{label}_landmarks"] = int(selection.sum())
+            record[f"pnp_{label}_median_error_px"] = (
+                float(np.median(errors)) if len(errors) else None
             )
+        if pnp.inliers is not None:
+            record["pnp_reported_inliers_over_threshold"] = int(
+                (residuals[pnp.inliers.ravel()] > PNP_INLIER_THRESHOLD_PX).sum()
+            )
+            selected_errors = residuals[pnp.inliers.ravel()]
+            finite_inliers = selected_errors[np.isfinite(selected_errors)]
+            record["pnp_median_inlier_error_px"] = (
+                float(np.median(finite_inliers)) if len(finite_inliers) else None
+            )
+
+    def _reprojection_errors_px(self, pnp, focal, rotation=None, translation=None):
+        """Per-landmark reprojection error, in approximate tracking pixels."""
+        np, cv = self.np, self.cv
+        rotation = pnp.rotation if rotation is None else rotation
+        translation = pnp.translation if translation is None else translation
+        projected, _ = cv.projectPoints(
+            pnp.objects, rotation, translation, np.eye(3), None
+        )
+        return np.linalg.norm(projected.reshape(-1, 2) - pnp.pixels, axis=1) * focal
+
+    def _refine_before_acceptance(self, pnp, shared, focal, record) -> None:
+        """`refined` pose acceptance: refine first, then recount support."""
+        record["ransac_inliers"] = record["pnp_inliers"]
+        pnp.ok, pnp.rotation, pnp.translation, pnp.inliers = refine_pose_support(
+            pnp.objects, pnp.pixels, pnp.rotation, pnp.translation, pnp.inliers, focal
+        )
+        record["pnp_solver_success"] = bool(pnp.ok)
+        record["pnp_inliers"] = len(pnp.inliers)
+        record["pnp_inlier_ratio"] = len(pnp.inliers) / len(shared) if shared else 0.0
+
+    def _passes_support_gates(self, pnp, shared) -> bool:
+        """Accept only with enough inliers that are also a large enough share."""
+        return not (
+            not pnp.ok
+            or pnp.inliers is None
+            or len(pnp.inliers) < MIN_MAP_CORRESPONDENCES
+            or len(pnp.inliers) / len(shared) < MIN_PNP_SUPPORT_RATIO
+        )
+
+    def _record_counterfactual_refinement(self, pnp, shared, focal, record) -> None:
+        """Audit only: would refining the inlier set pass the SAME gates?
+
+        Runs for baseline acceptance on rejected candidates. Copies keep this
+        diagnostic from changing the estimator pose.
+        """
+        np, cv = self.np, self.cv
+        if not (
+            self.pose_acceptance == "baseline"
+            and pnp.ok
+            and pnp.inliers is not None
+            and len(pnp.inliers) >= 6
+        ):
+            return
+        audit_ok, audit_rotation, audit_translation = cv.solvePnP(
+            pnp.objects[pnp.inliers.ravel()],
+            pnp.pixels[pnp.inliers.ravel()],
+            np.eye(3),
+            None,
+            pnp.rotation.copy(),
+            pnp.translation.copy(),
+            True,
+            flags=cv.SOLVEPNP_ITERATIVE,
+        )
+        if not audit_ok:
+            return
+        errors = self._reprojection_errors_px(
+            pnp, focal, audit_rotation, audit_translation
+        )
+        audit_camera = (
+            pnp.objects @ cv.Rodrigues(audit_rotation)[0].T + audit_translation.ravel()
+        )
+        support = int(
+            (
+                np.isfinite(errors)
+                & (errors <= PNP_INLIER_THRESHOLD_PX)
+                & (audit_camera[:, 2] > 0)
+            ).sum()
+        )
+        record["diagnostic_refined_support"] = support
+        record["diagnostic_refinement_passes_same_gates"] = bool(
+            support >= MIN_MAP_CORRESPONDENCES
+            and support / len(shared) >= MIN_PNP_SUPPORT_RATIO
+        )
+
+    def _failure_category(self, pnp, shared) -> str:
+        """Name the first gate that failed; this is not a root cause."""
+        if len(shared) < MIN_MAP_CORRESPONDENCES:
+            return "too_few_visible_landmarks"
+        if not pnp.ok or pnp.inliers is None:
+            return "pnp_solver_failed"
+        if len(pnp.inliers) < MIN_MAP_CORRESPONDENCES:
+            return "too_few_pnp_inliers"
+        return "low_pnp_inlier_ratio"
+
+    def _lose_tracking(self, row: TrackFrame, points, failure, record) -> None:
+        """Clear the segment; this frame becomes the next bootstrap anchor."""
+        record.update(
+            status="tracking_lost",
+            reason="insufficient_pnp_support",
+            failure_category=failure,
+        )
+        self._clear_map()
+        self.anchor = (row, points)
+        self.reference = None
+
+    def _accept_pose(self, pnp, focal, record) -> None:
+        """Set the pose (baseline: refine on inliers first) and audit its fit."""
+        np, cv = self.np, self.cv
+        accepted = pnp.inliers.ravel()
+        if self.pose_acceptance == "baseline":
+            ok, pnp.rotation, pnp.translation = cv.solvePnP(
+                pnp.objects[accepted],
+                pnp.pixels[accepted],
+                np.eye(3),
+                None,
+                pnp.rotation,
+                pnp.translation,
+                True,
+                flags=cv.SOLVEPNP_ITERATIVE,
+            )
+            if not ok:
+                raise ValueError("PnP refinement failed")
+        self.pose = np.column_stack(
+            (cv.Rodrigues(pnp.rotation)[0], pnp.translation.ravel())
+        )
+        # Audit the final pose independently: RANSAC's membership mask is
+        # not a guarantee that its returned/refined pose fits every inlier.
+        refined_errors = self._reprojection_errors_px(pnp, focal)
+        inlier_errors = refined_errors[accepted]
+        finite_errors = inlier_errors[np.isfinite(inlier_errors)]
+        record["refined_median_inlier_error_px"] = (
+            float(np.median(finite_errors)) if len(finite_errors) else None
+        )
+        record["refined_inliers_over_threshold"] = int(
+            (inlier_errors > PNP_INLIER_THRESHOLD_PX).sum()
+        )
+        record["refined_geometric_inliers"] = int(
+            (
+                np.isfinite(refined_errors)
+                & (refined_errors <= PNP_INLIER_THRESHOLD_PX)
+            ).sum()
+        )
+        record["pnp_inliers"] = len(accepted)
+
+    def _extend_map(self, points, focal, record) -> None:
+        """Validate/refine landmarks, triangulate new ones, maybe move keyframe."""
+        if self.landmark_policy != "baseline":
+            record["multiview_update"] = self._update_landmarks(points, focal)
+        # A keyframe must move enough to triangulate new points. Retain the
+        # previous keyframe through small motions; replace after replenishing.
+        reference_points, reference_pose = self.reference
+        old_count = len(self.landmarks)
+        if self.keyframe_policy == "parallax":
+            decision = choose_keyframe(
+                reference_points, reference_pose, points, self.pose
+            )
+            record["keyframe_decision"] = decision
         else:
-            shared = sorted(self.landmarks.keys() & points.keys())
-            result["pnp_candidates"] = len(shared)
-            # Diagnostic-only copy of the SAME map before current-frame updates.
-            self.last_pnp_snapshot = {
-                "ids": shared,
-                "objects": np.array([self.landmarks[key] for key in shared]).reshape(
-                    -1, 3
-                ),
-                "normalized": np.array([points[key] for key in shared]).reshape(-1, 2),
-                "camera": camera.copy(),
-                "candidate_pose": None,
-            }
-            inliers = None
-            ok = False
-            if len(shared) >= 20:
-                objects = np.array([self.landmarks[key] for key in shared])
-                pixels = np.array([points[key] for key in shared])
-                ok, rotation, translation, inliers = cv.solvePnPRansac(
-                    objects,
-                    pixels,
-                    np.eye(3),
-                    None,
-                    iterationsCount=100,
-                    reprojectionError=3.0 / focal,
-                    confidence=0.999,
-                    flags=cv.SOLVEPNP_EPNP,
-                )
-            if ok:
-                self.last_pnp_snapshot["candidate_pose"] = np.column_stack(
-                    (cv.Rodrigues(rotation)[0], translation.ravel())
-                )
-            # Preserve solver support before a failure clears the map. This
-            # distinguishes missing 3D correspondences from geometric rejection.
-            result["pnp_attempted"] = len(shared) >= 20
-            result["pnp_solver_success"] = bool(ok)
-            result["pnp_inliers"] = len(inliers) if inliers is not None else 0
-            result["pnp_inlier_ratio"] = (
-                result["pnp_inliers"] / len(shared) if shared else 0.0
+            decision = {"selected": True, "reason": "baseline_try_every_frame"}
+        if decision["selected"]:
+            self._triangulate(
+                reference_points, reference_pose, points, self.pose, focal
             )
-            if ok:
-                projected, _ = cv.projectPoints(
-                    objects, rotation, translation, np.eye(3), None
-                )
-                residuals = (
-                    np.linalg.norm(projected.reshape(-1, 2) - pixels, axis=1) * focal
-                )
-                finite = residuals[np.isfinite(residuals)]
-                result["pnp_median_candidate_error_px"] = (
-                    float(np.median(finite)) if len(finite) else None
-                )
-                ages = np.array(
-                    [
-                        self.step - self.landmark_birth.get(key, self.step)
-                        for key in shared
-                    ]
-                )
-                for label, selection in (("recent", ages <= 3), ("older", ages > 3)):
-                    errors = residuals[selection & np.isfinite(residuals)]
-                    result[f"pnp_{label}_landmarks"] = int(selection.sum())
-                    result[f"pnp_{label}_median_error_px"] = (
-                        float(np.median(errors)) if len(errors) else None
-                    )
-                if inliers is not None:
-                    result["pnp_reported_inliers_over_threshold"] = int(
-                        (residuals[inliers.ravel()] > 3.0).sum()
-                    )
-                    selected_errors = residuals[inliers.ravel()]
-                    finite_inliers = selected_errors[np.isfinite(selected_errors)]
-                    result["pnp_median_inlier_error_px"] = (
-                        float(np.median(finite_inliers))
-                        if len(finite_inliers)
-                        else None
-                    )
-            if self.pose_acceptance == "refined" and ok:
-                result["ransac_inliers"] = result["pnp_inliers"]
-                ok, rotation, translation, inliers = refine_pose_support(
-                    objects, pixels, rotation, translation, inliers, focal
-                )
-                result["pnp_solver_success"] = bool(ok)
-                result["pnp_inliers"] = len(inliers)
-                result["pnp_inlier_ratio"] = (
-                    len(inliers) / len(shared) if shared else 0.0
-                )
-            if (
-                not ok
-                or inliers is None
-                or len(inliers) < 20
-                or len(inliers) / len(shared) < 0.5
-            ):
-                # Counterfactual audit only: would refining the returned inlier
-                # set recover support under the SAME 3 px / 20 / 50% gates?
-                # Copies keep this diagnostic from changing the estimator pose.
-                if (
-                    self.pose_acceptance == "baseline"
-                    and ok
-                    and inliers is not None
-                    and len(inliers) >= 6
-                ):
-                    audit_ok, audit_rotation, audit_translation = cv.solvePnP(
-                        objects[inliers.ravel()],
-                        pixels[inliers.ravel()],
-                        np.eye(3),
-                        None,
-                        rotation.copy(),
-                        translation.copy(),
-                        True,
-                        flags=cv.SOLVEPNP_ITERATIVE,
-                    )
-                    if audit_ok:
-                        projected, _ = cv.projectPoints(
-                            objects, audit_rotation, audit_translation, np.eye(3), None
-                        )
-                        errors = (
-                            np.linalg.norm(projected.reshape(-1, 2) - pixels, axis=1)
-                            * focal
-                        )
-                        audit_camera = (
-                            objects @ cv.Rodrigues(audit_rotation)[0].T
-                            + audit_translation.ravel()
-                        )
-                        support = int(
-                            (
-                                np.isfinite(errors)
-                                & (errors <= 3.0)
-                                & (audit_camera[:, 2] > 0)
-                            ).sum()
-                        )
-                        result["diagnostic_refined_support"] = support
-                        result["diagnostic_refinement_passes_same_gates"] = bool(
-                            support >= 20 and support / len(shared) >= 0.5
-                        )
-                if len(shared) < 20:
-                    failure = "too_few_visible_landmarks"
-                elif not ok or inliers is None:
-                    failure = "pnp_solver_failed"
-                elif len(inliers) < 20:
-                    failure = "too_few_pnp_inliers"
-                else:
-                    failure = "low_pnp_inlier_ratio"
-                result.update(
-                    status="tracking_lost",
-                    reason="insufficient_pnp_support",
-                    failure_category=failure,
-                )
-                self.pose = None
-                self.landmarks = {}
-                self.bundle_window = []
-                self.pending_landmarks = {}
-                self.landmark_observations = {}
-                self.confirmed_landmarks = set()
-                self.anchor = (row, points)
-                self.reference = None
-                return result
-            accepted = inliers.ravel()
-            if self.pose_acceptance == "baseline":
-                ok, rotation, translation = cv.solvePnP(
-                    objects[accepted],
-                    pixels[accepted],
-                    np.eye(3),
-                    None,
-                    rotation,
-                    translation,
-                    True,
-                    flags=cv.SOLVEPNP_ITERATIVE,
-                )
-                if not ok:
-                    raise ValueError("PnP refinement failed")
-            self.pose = np.column_stack(
-                (cv.Rodrigues(rotation)[0], translation.ravel())
+            record["triangulation"] = self.triangulation_diagnostics.copy()
+        record["landmarks_added"] = len(self.landmarks) - old_count
+        if (
+            (self.keyframe_policy == "parallax" and decision["selected"])
+            or len(self.landmarks) > old_count
+            or (
+                self.landmark_policy in ("validation", "multiview")
+                and decision["selected"]
+                and self.triangulation_diagnostics.get("accepted", 0) > 0
             )
-            # Audit the final pose independently: RANSAC's membership mask is
-            # not a guarantee that its returned/refined pose fits every inlier.
-            projected, _ = cv.projectPoints(
-                objects, rotation, translation, np.eye(3), None
-            )
-            refined_errors = (
-                np.linalg.norm(projected.reshape(-1, 2) - pixels, axis=1) * focal
-            )
-            inlier_errors = refined_errors[accepted]
-            finite_errors = inlier_errors[np.isfinite(inlier_errors)]
-            result["refined_median_inlier_error_px"] = (
-                float(np.median(finite_errors)) if len(finite_errors) else None
-            )
-            result["refined_inliers_over_threshold"] = int((inlier_errors > 3.0).sum())
-            result["refined_geometric_inliers"] = int(
-                (np.isfinite(refined_errors) & (refined_errors <= 3.0)).sum()
-            )
-            result["pnp_inliers"] = len(accepted)
-            if self.landmark_policy != "baseline":
-                result["multiview_update"] = self._update_landmarks(points, focal)
-            # A keyframe must move enough to triangulate new points. Retain the
-            # previous keyframe through small motions; replace after replenishing.
-            reference_points, reference_pose = self.reference
-            old_count = len(self.landmarks)
-            if self.keyframe_policy == "parallax":
-                decision = choose_keyframe(
-                    reference_points, reference_pose, points, self.pose
-                )
-                result["keyframe_decision"] = decision
-            else:
-                decision = {"selected": True, "reason": "baseline_try_every_frame"}
-            if decision["selected"]:
-                self._triangulate(
-                    reference_points, reference_pose, points, self.pose, focal
-                )
-                result["triangulation"] = self.triangulation_diagnostics.copy()
-            result["landmarks_added"] = len(self.landmarks) - old_count
-            if (
-                (self.keyframe_policy == "parallax" and decision["selected"])
-                or len(self.landmarks) > old_count
-                or (
-                    self.landmark_policy in ("validation", "multiview")
-                    and decision["selected"]
-                    and self.triangulation_diagnostics.get("accepted", 0) > 0
-                )
-            ):
-                self.reference = (points, self.pose.copy())
-            # IDs never return after loss; bound memory to currently visible IDs.
-            self.landmarks = {
-                key: value for key, value in self.landmarks.items() if key in points
-            }
+        ):
+            self.reference = (points, self.pose.copy())
+        # IDs never return after loss; bound memory to currently visible IDs.
+        self.landmarks = {
+            key: value for key, value in self.landmarks.items() if key in points
+        }
+
+    # -- Completing a tracked frame -------------------------------------------
+
+    def _finish_tracking_frame(self, points, focal, record) -> None:
+        """Prune birth steps, optionally run local BA, then report the pose."""
         self.landmark_birth = {
             key: self.landmark_birth[key]
             for key in self.landmarks.keys() | self.pending_landmarks.keys()
             if key in self.landmark_birth
         }
         if self.bundle_adjustment:
-            result["bundle_adjustment"] = self._adjust_bundle(points, focal)
+            record["bundle_adjustment"] = self._adjust_bundle(points, focal)
         center = -self.pose[:, :3].T @ self.pose[:, 3]
-        result.update(
+        record.update(
             status="tracking",
             segment=self.segment,
             landmarks=len(self.landmarks),
             camera_center_arbitrary=center.tolist(),
             world_to_camera=self.pose.tolist(),
         )
-        return result
