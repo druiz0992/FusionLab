@@ -24,6 +24,24 @@ MIN_PNP_SUPPORT_RATIO = 0.5
 # Reprojection threshold for PnP support, in approximate tracking pixels.
 PNP_INLIER_THRESHOLD_PX = 3.0
 
+# Triangulation: worst-view reprojection error and minimum ray angle.
+TRIANGULATION_MAX_ERROR_PX = 2.0
+MIN_TRIANGULATION_PARALLAX_DEG = 1.0
+# Landmark validation/refinement: every kept observation must reproject this well.
+LANDMARK_MAX_ERROR_PX = 3.0
+# Observation history per landmark: the first view plus the latest views.
+MAX_LANDMARK_HISTORY = 5
+
+# Local bundle adjustment window and schedule.
+BA_WINDOW_FRAMES = 5
+BA_MIN_WINDOW_FRAMES = 4
+BA_INTERVAL_STEPS = 3
+BA_MIN_LANDMARK_VIEWS = 3
+BA_MAX_LANDMARKS = 80
+BA_MIN_OBSERVATIONS_PER_POSE = 10
+# Reject an update if the current-frame median error grows by more than 5%.
+BA_MAX_MEDIAN_ERROR_GROWTH = 1.05
+
 
 @dataclass
 class _PnpCandidate:
@@ -84,6 +102,24 @@ def refine_pose_support(objects, pixels, rotation, translation, inliers, focal):
         & (camera[:, 2] > 0)
     ).reshape(-1, 1)
     return True, refined_rotation, refined_translation, support
+
+
+def _bounded_history(history, observation):
+    """Append an observation, keeping the first view and the latest ones."""
+    history = history + [observation]
+    if len(history) > MAX_LANDMARK_HISTORY:
+        history = [history[0]] + history[-(MAX_LANDMARK_HISTORY - 1) :]
+    return history
+
+
+def _window_observations(window, identifiers):
+    """(frame index, landmark index, ray) for every landmark seen in each frame."""
+    return [
+        (camera, index, frame["points"][key])
+        for camera, frame in enumerate(window)
+        for index, key in enumerate(identifiers)
+        if key in frame["points"]
+    ]
 
 
 class MonocularOdometry:
@@ -166,17 +202,21 @@ class MonocularOdometry:
             normalized = np.empty((0, 2))
         return dict(zip(identifiers, normalized)), camera
 
+    # -- Triangulation --------------------------------------------------------
+
     def _triangulate(
         self, points_a, pose_a, points_b, pose_b, focal, *, bootstrap=False
     ):
-        """Accept positive-depth points with parallax and low reprojection error."""
-        np, cv = self.np, self.cv
-        identifiers = sorted(
-            (points_a.keys() & points_b.keys())
-            - self.landmarks.keys()
-            - self.pending_landmarks.keys()
-        )
-        self.triangulation_diagnostics = {
+        """Triangulate new track IDs seen in both views; admit the good ones.
+
+        A candidate is admitted when it has positive depth in both cameras,
+        reprojects within TRIANGULATION_MAX_ERROR_PX in both views, and its
+        rays meet at MIN_TRIANGULATION_PARALLAX_DEG or more. Counts per outcome
+        are kept in `triangulation_diagnostics`. Returns the candidate count.
+        """
+        np = self.np
+        identifiers = self._triangulation_candidates(points_a, points_b)
+        diagnostics = {
             "candidates": len(identifiers),
             "accepted": 0,
             "invalid_depth_or_homogeneous": 0,
@@ -185,13 +225,62 @@ class MonocularOdometry:
             "accepted_parallax_deg": [],
             "accepted_max_reprojection_px": [],
         }
+        self.triangulation_diagnostics = diagnostics
         if not identifiers:
             return 0
         a = np.array([points_a[key] for key in identifiers])
         b = np.array([points_b[key] for key in identifiers])
+        points, camera_a, camera_b, valid = self._triangulate_rays(a, b, pose_a, pose_b)
+        center_a = -pose_a[:, :3].T @ pose_a[:, 3]
+        center_b = -pose_b[:, :3].T @ pose_b[:, 3]
+        for index, key in enumerate(identifiers):
+            if not valid[index]:
+                diagnostics["invalid_depth_or_homogeneous"] += 1
+                continue
+            error_px, parallax = self._candidate_quality(
+                points[index],
+                camera_a[index],
+                camera_b[index],
+                a[index],
+                b[index],
+                center_a,
+                center_b,
+                focal,
+            )
+            if (
+                error_px <= TRIANGULATION_MAX_ERROR_PX
+                and parallax >= MIN_TRIANGULATION_PARALLAX_DEG
+            ):
+                observations = ((pose_a, a[index]), (pose_b, b[index]))
+                self._admit_landmark(key, points[index], observations, bootstrap)
+                diagnostics["accepted"] += 1
+                diagnostics["accepted_parallax_deg"].append(float(parallax))
+                diagnostics["accepted_max_reprojection_px"].append(float(error_px))
+            elif error_px > TRIANGULATION_MAX_ERROR_PX:
+                diagnostics["high_reprojection_error"] += 1
+            else:
+                diagnostics["low_parallax"] += 1
+        return len(identifiers)
+
+    def _triangulation_candidates(self, points_a, points_b) -> list:
+        """Track IDs in both views that are neither mapped nor pending."""
+        return sorted(
+            (points_a.keys() & points_b.keys())
+            - self.landmarks.keys()
+            - self.pending_landmarks.keys()
+        )
+
+    def _triangulate_rays(self, a, b, pose_a, pose_b):
+        """Linear triangulation of normalized rays; flags unusable points.
+
+        Returns world points, their camera-frame coordinates in both views and a
+        mask that is False for points at infinity, behind either camera, or
+        nonfinite.
+        """
+        np, cv = self.np, self.cv
         homogeneous = cv.triangulatePoints(pose_a, pose_b, a.T, b.T)
         valid = np.abs(homogeneous[3]) > 1e-10
-        points = np.zeros((len(identifiers), 3))
+        points = np.zeros((len(a), 3))
         points[valid] = (homogeneous[:3, valid] / homogeneous[3, valid]).T
         camera_a = points @ pose_a[:, :3].T + pose_a[:, 3]
         camera_b = points @ pose_b[:, :3].T + pose_b[:, 3]
@@ -200,46 +289,37 @@ class MonocularOdometry:
             & (camera_b[:, 2] > 0)
             & np.isfinite(points).all(axis=1)
         )
-        for index, key in enumerate(identifiers):
-            if not valid[index]:
-                self.triangulation_diagnostics["invalid_depth_or_homogeneous"] += 1
-                continue
-            point = points[index]
-            error_a = np.linalg.norm(
-                camera_a[index, :2] / camera_a[index, 2] - a[index]
-            )
-            error_b = np.linalg.norm(
-                camera_b[index, :2] / camera_b[index, 2] - b[index]
-            )
-            center_a = -pose_a[:, :3].T @ pose_a[:, 3]
-            center_b = -pose_b[:, :3].T @ pose_b[:, 3]
-            ray_a = point - center_a
-            ray_b = point - center_b
-            cosine = ray_a @ ray_b / (np.linalg.norm(ray_a) * np.linalg.norm(ray_b))
-            parallax = np.degrees(np.arccos(np.clip(cosine, -1, 1)))
-            if max(error_a, error_b) * focal <= 2.0 and parallax >= 1.0:
-                if self.landmark_policy.keeps_observations:
-                    self.landmark_observations[key] = [
-                        (pose_a.copy(), a[index].copy()),
-                        (pose_b.copy(), b[index].copy()),
-                    ]
-                if self.landmark_policy.validate_third_view and not bootstrap:
-                    self.pending_landmarks[key] = point
-                else:
-                    self.landmarks[key] = point
-                self.landmark_birth[key] = self.step
-                self.triangulation_diagnostics["accepted"] += 1
-                self.triangulation_diagnostics["accepted_parallax_deg"].append(
-                    float(parallax)
-                )
-                self.triangulation_diagnostics["accepted_max_reprojection_px"].append(
-                    float(max(error_a, error_b) * focal)
-                )
-            elif max(error_a, error_b) * focal > 2.0:
-                self.triangulation_diagnostics["high_reprojection_error"] += 1
-            else:
-                self.triangulation_diagnostics["low_parallax"] += 1
-        return len(identifiers)
+        return points, camera_a, camera_b, valid
+
+    def _candidate_quality(
+        self, point, camera_a, camera_b, ray_a, ray_b, center_a, center_b, focal
+    ):
+        """Worst-view reprojection error (approx. px) and ray parallax (deg)."""
+        np = self.np
+        error_a = np.linalg.norm(camera_a[:2] / camera_a[2] - ray_a)
+        error_b = np.linalg.norm(camera_b[:2] / camera_b[2] - ray_b)
+        sight_a = point - center_a
+        sight_b = point - center_b
+        cosine = sight_a @ sight_b / (np.linalg.norm(sight_a) * np.linalg.norm(sight_b))
+        parallax = np.degrees(np.arccos(np.clip(cosine, -1, 1)))
+        return max(error_a, error_b) * focal, parallax
+
+    def _admit_landmark(self, key, point, observations, bootstrap) -> None:
+        """Store an accepted point as mapped or, under validation, as pending.
+
+        Bootstrap points always enter the map: they must seed the first PnP.
+        """
+        if self.landmark_policy.keeps_observations:
+            self.landmark_observations[key] = [
+                (pose.copy(), ray.copy()) for pose, ray in observations
+            ]
+        if self.landmark_policy.validate_third_view and not bootstrap:
+            self.pending_landmarks[key] = point
+        else:
+            self.landmarks[key] = point
+        self.landmark_birth[key] = self.step
+
+    # -- Landmark validation and refinement -----------------------------------
 
     def _update_landmarks(self, points, focal):
         """Validate a new observation after estimating pose from the active map.
@@ -248,12 +328,6 @@ class MonocularOdometry:
         candidates remain pending until a third view validates them; they never
         participate in estimating the pose used for their own third-view test.
         """
-        from fusionlab.vision.odometry.landmark_refinement import (
-            refine_landmark,
-            reprojection_errors,
-        )
-
-        np = self.np
         diagnostics = {
             "confirmed": 0,
             "rejected_third_view": 0,
@@ -265,44 +339,60 @@ class MonocularOdometry:
             (True, self.pending_landmarks),
         ):
             for key in list(population):
-                if key not in points:
-                    continue
-                point = population[key]
-                history = self.landmark_observations.get(key)
-                if history is None:
-                    continue
-                observation = (self.pose.copy(), points[key].copy())
-                error = reprojection_errors(point, [observation], focal)[0]
-                if not np.isfinite(error) or error > 3.0:
-                    if (
-                        self.landmark_policy.validate_third_view
-                        and key not in self.confirmed_landmarks
-                    ):
-                        del population[key]
-                        self.landmark_observations.pop(key, None)
-                        diagnostics["rejected_third_view"] += 1
-                    continue
-                # Preserve the initial view and four latest views to bound work.
-                history = history + [observation]
-                if len(history) > 5:
-                    history = [history[0]] + history[-4:]
-                candidate = (
-                    refine_landmark(point, history)
-                    if self.landmark_policy.refine_positions
-                    else point.copy()
-                )
-                errors = reprojection_errors(candidate, history, focal)
-                if np.isfinite(errors).all() and errors.max() <= 3.0:
-                    self.landmark_observations[key] = history
-                    population[key] = candidate
-                    if self.landmark_policy.refine_positions:
-                        diagnostics["refined"] += 1
-                    if key not in self.confirmed_landmarks:
-                        self.confirmed_landmarks.add(key)
-                        diagnostics["confirmed"] += 1
-                    if pending:
-                        self.landmarks[key] = candidate
-                        del self.pending_landmarks[key]
+                if key in points and key in self.landmark_observations:
+                    self._observe_landmark(
+                        key, population, pending, points[key], focal, diagnostics
+                    )
+        self._prune_landmark_records(points)
+        diagnostics["pending"] = len(self.pending_landmarks)
+        return diagnostics
+
+    def _observe_landmark(
+        self, key, population, pending, ray, focal, diagnostics
+    ) -> None:
+        """Test one landmark against the current view; extend or refine it."""
+        from fusionlab.vision.odometry.landmark_refinement import (
+            refine_landmark,
+            reprojection_errors,
+        )
+
+        np = self.np
+        point = population[key]
+        observation = (self.pose.copy(), ray.copy())
+        error = reprojection_errors(point, [observation], focal)[0]
+        if not np.isfinite(error) or error > LANDMARK_MAX_ERROR_PX:
+            # Only unconfirmed landmarks are dropped; confirmed ones may simply
+            # be occluded or mismatched in this frame.
+            if (
+                self.landmark_policy.validate_third_view
+                and key not in self.confirmed_landmarks
+            ):
+                del population[key]
+                self.landmark_observations.pop(key, None)
+                diagnostics["rejected_third_view"] += 1
+            return
+        history = _bounded_history(self.landmark_observations[key], observation)
+        candidate = (
+            refine_landmark(point, history)
+            if self.landmark_policy.refine_positions
+            else point.copy()
+        )
+        errors = reprojection_errors(candidate, history, focal)
+        if not (np.isfinite(errors).all() and errors.max() <= LANDMARK_MAX_ERROR_PX):
+            return
+        self.landmark_observations[key] = history
+        population[key] = candidate
+        if self.landmark_policy.refine_positions:
+            diagnostics["refined"] += 1
+        if key not in self.confirmed_landmarks:
+            self.confirmed_landmarks.add(key)
+            diagnostics["confirmed"] += 1
+        if pending:
+            self.landmarks[key] = candidate
+            del self.pending_landmarks[key]
+
+    def _prune_landmark_records(self, points) -> None:
+        """Forget pending points, histories and confirmations of unseen IDs."""
         live = set(points)
         self.pending_landmarks = {
             key: point for key, point in self.pending_landmarks.items() if key in live
@@ -314,50 +404,31 @@ class MonocularOdometry:
             if key in keep
         }
         self.confirmed_landmarks.intersection_update(keep)
-        diagnostics["pending"] = len(self.pending_landmarks)
-        return diagnostics
+
+    # -- Local bundle adjustment ----------------------------------------------
 
     def _adjust_bundle(self, points, focal):
-        """Optimize a bounded local window and validate current map support."""
+        """Optimize a bounded local window and validate current map support.
+
+        Every BA_INTERVAL_STEPS frames, jointly refine up to BA_MAX_LANDMARKS
+        well-observed landmarks and the window poses. The update is kept only
+        if it does not degrade support in the current frame.
+        """
         from fusionlab.vision.odometry.local_bundle_adjustment import optimize_window
 
         np = self.np
-        if not self.bundle_window:
-            self.bundle_window.append(
-                {
-                    "pose": np.column_stack((np.eye(3), np.zeros(3))),
-                    "points": self.anchor[1],
-                    "step": None,
-                    "received_monotonic_ns": self.anchor[0].received_monotonic_ns,
-                }
-            )
-        self.bundle_window.append(
-            {"pose": self.pose.copy(), "points": points, "step": self.step}
-        )
-        self.bundle_window = self.bundle_window[-5:]
-        if len(self.bundle_window) < 4 or self.step % 3:
-            return {"attempted": False, "reason": "waiting_for_window_or_interval"}
+        self._append_bundle_frame(points)
         window = self.bundle_window
-        counts = {
-            key: sum(key in frame["points"] for frame in window)
-            for key in self.landmarks
-        }
-        identifiers = sorted(
-            (key for key, count in counts.items() if count >= 3),
-            key=lambda key: (-counts[key], key),
-        )[:80]
-        if len(identifiers) < 20:
+        if len(window) < BA_MIN_WINDOW_FRAMES or self.step % BA_INTERVAL_STEPS:
+            return {"attempted": False, "reason": "waiting_for_window_or_interval"}
+        identifiers = self._select_bundle_landmarks(window)
+        if len(identifiers) < MIN_MAP_CORRESPONDENCES:
             return {"attempted": False, "reason": "insufficient_multiview_landmarks"}
         poses = np.array([frame["pose"] for frame in window])
         objects = np.array([self.landmarks[key] for key in identifiers])
-        observations = [
-            (camera, index, frame["points"][key])
-            for camera, frame in enumerate(window)
-            for index, key in enumerate(identifiers)
-            if key in frame["points"]
-        ]
+        observations = _window_observations(window, identifiers)
         if any(
-            sum(o[0] == index for o in observations) < 10
+            sum(o[0] == index for o in observations) < BA_MIN_OBSERVATIONS_PER_POSE
             for index in range(len(window))
         ):
             return {"attempted": False, "reason": "insufficient_pose_observations"}
@@ -378,39 +449,99 @@ class MonocularOdometry:
         if not diagnostics["accepted"]:
             return diagnostics
         proposed = {**self.landmarks, **dict(zip(identifiers, new_points))}
-        shared = sorted(self.landmarks.keys() & points.keys())
+        if not self._bundle_keeps_current_support(
+            new_poses[-1], proposed, points, focal, diagnostics
+        ):
+            diagnostics.update(accepted=False, reason="current_frame_support_degraded")
+            return diagnostics
+        self._apply_bundle_correction(window, poses, new_poses, proposed)
+        diagnostics["window_pose_corrections"] = [
+            {"step": frame["step"], "world_to_camera": pose.tolist()}
+            for frame, pose in zip(window, new_poses)
+        ]
+        return diagnostics
 
-        def current_support(pose, landmarks):
-            objects = np.array([landmarks[key] for key in shared])
-            camera = objects @ pose[:, :3].T + pose[:, 3]
-            errors = np.full(len(shared), np.inf)
-            valid = (camera[:, 2] > 1e-6) & np.isfinite(camera).all(axis=1)
-            observed = np.array([points[key] for key in shared])
-            errors[valid] = (
-                np.linalg.norm(
-                    camera[valid, :2] / camera[valid, 2, None] - observed[valid], axis=1
-                )
-                * focal
+    def _append_bundle_frame(self, points) -> None:
+        """Add this frame to the sliding window, seeding it with the anchor."""
+        np = self.np
+        if not self.bundle_window:
+            # The segment's first camera is the world origin with identity pose.
+            self.bundle_window.append(
+                {
+                    "pose": np.column_stack((np.eye(3), np.zeros(3))),
+                    "points": self.anchor[1],
+                    "step": None,
+                    "received_monotonic_ns": self.anchor[0].received_monotonic_ns,
+                }
             )
-            return int((errors <= 3.0).sum()), float(np.median(errors))
+        self.bundle_window.append(
+            {"pose": self.pose.copy(), "points": points, "step": self.step}
+        )
+        self.bundle_window = self.bundle_window[-BA_WINDOW_FRAMES:]
 
-        before_count, before_error = current_support(self.pose, self.landmarks)
-        after_count, after_error = current_support(new_poses[-1], proposed)
+    def _select_bundle_landmarks(self, window) -> list:
+        """Landmarks seen in enough window frames, most-observed first."""
+        counts = {
+            key: sum(key in frame["points"] for frame in window)
+            for key in self.landmarks
+        }
+        return sorted(
+            (key for key, count in counts.items() if count >= BA_MIN_LANDMARK_VIEWS),
+            key=lambda key: (-counts[key], key),
+        )[:BA_MAX_LANDMARKS]
+
+    def _bundle_keeps_current_support(
+        self, new_pose, proposed, points, focal, diagnostics
+    ) -> bool:
+        """Guard: the update must not reduce support in the current frame.
+
+        The selected-window cost can improve while the full current map fits
+        worse; that case is rejected (see docs/3_experiment_results.md).
+        """
+        np = self.np
+        shared = sorted(self.landmarks.keys() & points.keys())
+        before_count, before_error = self._current_support(
+            self.pose, self.landmarks, shared, points, focal
+        )
+        after_count, after_error = self._current_support(
+            new_pose, proposed, shared, points, focal
+        )
         diagnostics.update(
             current_support_before=before_count,
             current_support_after=after_count,
             current_median_error_before_px=before_error,
             current_median_error_after_px=after_error,
         )
-        if (
+        return not (
             after_count < before_count
             or not np.isfinite(after_error)
-            or after_error > before_error * 1.05
-        ):
-            diagnostics.update(accepted=False, reason="current_frame_support_degraded")
-            return diagnostics
-        # Keep stored observation/reference poses consistent with the corrected
-        # window. Other historical poses stay fixed; there is no marginalization.
+            or after_error > before_error * BA_MAX_MEDIAN_ERROR_GROWTH
+        )
+
+    def _current_support(self, pose, landmarks, shared, points, focal):
+        """Count landmarks within 3 px in this frame, and the median error."""
+        np = self.np
+        objects = np.array([landmarks[key] for key in shared])
+        camera = objects @ pose[:, :3].T + pose[:, 3]
+        errors = np.full(len(shared), np.inf)
+        valid = (camera[:, 2] > 1e-6) & np.isfinite(camera).all(axis=1)
+        observed = np.array([points[key] for key in shared])
+        errors[valid] = (
+            np.linalg.norm(
+                camera[valid, :2] / camera[valid, 2, None] - observed[valid], axis=1
+            )
+            * focal
+        )
+        return int((errors <= PNP_INLIER_THRESHOLD_PX).sum()), float(np.median(errors))
+
+    def _apply_bundle_correction(self, window, poses, new_poses, proposed) -> None:
+        """Adopt corrected window poses and landmarks everywhere they are stored.
+
+        Observation histories and the reference keyframe refer to window poses by
+        value, so they are updated too. Other historical poses stay fixed; there
+        is no marginalization, and saved output poses are never rewritten.
+        """
+        np = self.np
         for history in self.landmark_observations.values():
             for index, (pose, observed) in enumerate(history):
                 for old, new in zip(poses, new_poses):
@@ -426,11 +557,6 @@ class MonocularOdometry:
             frame["pose"] = pose.copy()
         self.landmarks = proposed
         self.pose = new_poses[-1].copy()
-        diagnostics["window_pose_corrections"] = [
-            {"step": frame["step"], "world_to_camera": pose.tolist()}
-            for frame, pose in zip(window, new_poses)
-        ]
-        return diagnostics
 
     def process(self, row: TrackFrame) -> FrameResult:
         """Advance the estimator by one tracking frame.
