@@ -68,8 +68,8 @@ remain separate sources of uncertainty.
 
 Collect a **separate** verification capture with the same camera configuration,
 preferably with a measured printed target mounted flat, and evaluate the existing
-intrinsics with `benchmarks/validate_calibration.py` before fitting a replacement.
-The script checks image integrity and original dimensions, detects the board
+intrinsics with `fusionlab validate-calibration` (`fusionlab.vision.calibration_validation`)
+before fitting a replacement. The command checks image integrity and original dimensions, detects the board
 described by the calibration and holds K/distortion fixed. Board pose is fitted
 on four fifths of the corners and the remaining corners are scored. It writes
 `summary.json` into a new directory and never edits images or the calibration.

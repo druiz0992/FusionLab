@@ -127,16 +127,21 @@ These are separate baselines, not fused inputs to VO.
 ```bash
 fusionlab calibration-target                      # writes docs/calibration_target/
 fusionlab calibrate-camera CALIBRATION_CAPTURE --square-mm 25
-python benchmarks/validate_calibration.py VERIFICATION_CAPTURE EXISTING_CALIBRATION_JSON \
-  --output-dir NEW_VALIDATION_DIRECTORY --stride 60 --max-views 40
+fusionlab validate-calibration VERIFICATION_CAPTURE EXISTING_CALIBRATION_JSON \
+  --output-dir NEW_VALIDATION_DIRECTORY
 ```
 
 `calibrate-camera` options: `--square-mm` (measured printed square), `--columns`/
 `--rows` (inner corners, default 9×6), `--stride` (default every 15th frame),
-`--max-views` (default 40), `--camera-stream`, `--output-dir`. The validator holds
-an existing fit fixed and scores held-out corners; `--image-list` accepts a prior
-`detections.json`. Use the measured square size of your own print; the full
-procedure is in [camera calibration](docs/5_camera_and_visual_odometry.md#camera-calibration).
+`--max-views` (default 40), `--camera-stream`, `--output-dir`. Use the measured
+square size of your own print.
+
+`validate-calibration` holds an existing fit fixed on a **separate** capture and
+scores held-out corners, writing `summary.json` to a new `--output-dir` (required).
+Options: `--stride` (default every 60th frame), `--max-views` (default 40),
+`--image-list` (a prior `detections.json` whose `accepted_images` replace stride
+sampling). The full procedure is in
+[camera calibration](docs/5_camera_and_visual_odometry.md#camera-calibration).
 
 ### Feature tracking and visual odometry
 

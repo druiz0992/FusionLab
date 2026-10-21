@@ -151,6 +151,23 @@ def main() -> None:
     calibration.add_argument("--max-views", type=int, default=40)
     calibration.add_argument("--camera-stream")
     calibration.add_argument("--output-dir", type=Path)
+    # Scores existing intrinsics on a separate capture; never refits them.
+    validation = commands.add_parser(
+        "validate-calibration",
+        help="Score fixed RGB intrinsics on a separate checkerboard capture",
+    )
+    validation.add_argument("capture", type=Path)
+    validation.add_argument("calibration", type=Path, help="Existing calibration.json")
+    validation.add_argument(
+        "--output-dir", type=Path, required=True, help="New directory for summary.json"
+    )
+    validation.add_argument(
+        "--image-list",
+        type=Path,
+        help="detections.json whose accepted_images replace stride sampling",
+    )
+    validation.add_argument("--stride", type=int, default=60)
+    validation.add_argument("--max-views", type=int, default=40)
     visual = commands.add_parser(
         "visualize", help="Explore a recorded capture with the standalone Rerun viewer"
     )
@@ -436,6 +453,24 @@ def main() -> None:
                 camera_stream=args.camera_stream,
             )
             print(json.dumps(report, indent=2))
+        elif args.command == "validate-calibration":
+            from fusionlab.vision.calibration_validation import validate_calibration
+
+            result = validate_calibration(
+                args.capture,
+                args.calibration,
+                args.output_dir,
+                image_list=args.image_list,
+                stride=args.stride,
+                max_views=args.max_views,
+            )
+            # Per-image rows stay in summary.json; print only the aggregate.
+            per_image = ("images", "rejected_images")
+            print(
+                json.dumps(
+                    {k: v for k, v in result.items() if k not in per_image}, indent=2
+                )
+            )
         elif args.command == "replay":
             asyncio.run(_replay(args.capture, args.speed, args.acceleration_unit))
         elif args.command == "dead-reckoning":

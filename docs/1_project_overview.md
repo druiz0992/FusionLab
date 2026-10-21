@@ -71,6 +71,7 @@ src/fusionlab/
     dead_reckoning.py                  exploratory position integration
   vision/
     calibration.py                     checkerboard target and intrinsic fitting
+    calibration_validation.py          scoring fixed intrinsics on a separate capture
     feature_tracking.py                image correspondences and overlays
     two_view.py                        uncalibrated pair geometry
     calibrated_motion.py               calibrated pair-motion diagnostics
@@ -92,7 +93,7 @@ Other top-level folders:
 | --- | --- |
 | `tests/` | Unit and integration tests (`test_*.py`, unittest discovery) |
 | `examples/` | Synthetic viewer API demonstrations |
-| `benchmarks/` | Local performance/validation scripts and the external ORB-SLAM3 driver; not independent accuracy benchmarks |
+| `benchmarks/` | Local performance experiments and the external ORB-SLAM3 driver; not independent accuracy benchmarks |
 | `scripts/` | Maintenance, including the data-layout audit/restore tool |
 | `docs/` | These numbered documents and the printable `calibration_target/` |
 | `data/sessions/` | Active captures and selected RGB calibration |

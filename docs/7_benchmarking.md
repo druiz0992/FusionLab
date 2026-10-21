@@ -78,8 +78,6 @@ settings; do not compare monocular VO against stereo or inertial estimation.
 
 ## Other benchmark scripts
 
-- `benchmarks/validate_calibration.py`: scores an existing calibration on a new
-  capture without refitting ([procedure](5_camera_and_visual_odometry.md#validate-an-existing-fit-without-refitting)).
 - `benchmarks/camera_receiver.py`: local TCP camera receive throughput test using a saved JPEG (no phone needed);
   not an accuracy benchmark.
 
