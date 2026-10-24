@@ -1,6 +1,6 @@
 # 7. Benchmarking and evaluation
 
-Updated 2026-10-21. Benchmarks distinguish estimator problems from phone
+Updated 2026-10-24. Benchmarks distinguish estimator problems from phone
 calibration/capture uncertainty. Commands are in the
 [README](../README.md#benchmark-against-ground-truth-euroc); results belong in
 [3. Experiment results](3_experiment_results.md).
@@ -59,6 +59,11 @@ alignment is possible).
 - Fewer than three matches or collinear/stationary motion cannot constrain the
   alignment and are reported as unavailable. Frames without reference remain in
   continuity counts.
+- Rotation error inherits the alignment rotation, which is fitted to positions
+  only. On near-straight segments roll about the travel direction is weakly
+  constrained, so `rotation_rmse_deg` can mostly reflect that ambiguity: on the
+  synthetic parity sequence (2026-10-24) VO relative rotations were within about
+  1° of truth while the fitted alignment was 11.6° off, giving an 11.8° RMSE.
 
 **These are per-segment consistency scores, not a whole-route drift score.**
 Alignment on short fragments can conceal failures. Always compare coverage,

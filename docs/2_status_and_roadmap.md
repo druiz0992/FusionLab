@@ -121,15 +121,20 @@ Group-1 typing pass done 2026-10-24: the six group-1 files plus new
 `--disallow-untyped-defs` (project total 84 → 62 errors). Estimator state uses
 typed objects (anchor, keyframe, BA window frame, `PnpSnapshot`, triangulation
 counts), BA returns a `WindowAdjustment` and raises `DegenerateAnchorBaseline`.
-Validation: full suite (173 tests) and `scripts/output_parity.sh` (117 files,
+Group 2 done 2026-10-24: `evaluate_run` and `import_sequence` split into typed
+steps (`ReferenceTrajectory`, `Similarity`, `CameraModel`, camera-frame and
+ground-truth readers); the parity script gained a generated EuRoC sequence
+(`scripts/make_synthetic_euroc.py`) covering import → VO → evaluation.
+Validation: full suite (181 tests) and `scripts/output_parity.sh` (257 files,
 0 differ). Next actions, in order:
-1. Group 2, before the first EuRoC run: split and type
-   `evaluation/ground_truth.evaluate_run` (195 lines) and
-   `recordings/euroc.import_sequence` (102 lines).
-2. Ask the user about group 3 (`sensor_stream/source._receive` 249 lines, viewer
+1. Ask the user about group 3 (`sensor_stream/source._receive` 249 lines, viewer
    `api.publish`/`rerun_backend.publish`, inspection plots, IMU baselines,
    calibration fitting); it was deferred because acquisition needs a live phone.
-3. Then item 2 below: per-track triangulation as an opt-in landmark variant.
+2. Then item 2 below: per-track triangulation as an opt-in landmark variant.
+3. Decide whether to change the trajectory rotation metric: it inherits a
+   position-fitted alignment rotation that is weakly constrained on straight
+   segments ([benchmarking](7_benchmarking.md#evaluate)). Candidates: relative
+   rotation errors, or fitting the alignment rotation to orientations as well.
 
 **Unfinished (2026-10-18): real EuRoC benchmark run.** EuRoC cam0 import and
 timestamp-associated ground-truth evaluation are implemented and tested on

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from fusionlab.vision.tracks import TrackFrame
 
+from support.euroc import write_euroc_sequence
 from support.vision import calibration_json, track_row, translating_camera_rows
 from support import require
 
@@ -61,38 +62,6 @@ class EurocBenchmarkTests(unittest.TestCase):
             self.skipTest("benchmark extras unavailable")
         self.np, self.cv, self.yaml, self.Rotation = np, cv2, yaml, Rotation
 
-    def fixture(self, root):
-        np = self.np
-        mav = root / "source/mav0"
-        camera = mav / "cam0"
-        (camera / "data").mkdir(parents=True)
-        gt = mav / "state_groundtruth_estimate0"
-        gt.mkdir()
-        transform = np.eye(4)
-        transform[0, 3] = 0.2
-        sensor = dict(
-            camera_model="pinhole",
-            distortion_model="radial-tangential",
-            resolution=[96, 64],
-            intrinsics=[80, 80, 48, 32],
-            distortion_coefficients=[0, 0, 0, 0],
-            T_BS=dict(data=transform.ravel().tolist()),
-        )
-        (camera / "sensor.yaml").write_text(self.yaml.safe_dump(sensor))
-        epoch = 1400000000000000000
-        frames = []
-        states = []
-        for i in range(8):
-            stamp = epoch + i * 10000000
-            filename = f"{stamp}.png"
-            image = np.random.default_rng(4).integers(0, 255, (64, 96), dtype=np.uint8)
-            self.cv.imwrite(str(camera / "data" / filename), image)
-            frames.append(f"{stamp},{filename}\n")
-            states.append(f"{stamp},{i*0.1},{(i*0.1)**2},0,1,0,0,0,0,0,0\n")
-        (camera / "data.csv").write_text("#timestamp,filename\n" + "".join(frames))
-        (gt / "data.csv").write_text("#timestamp,p,q\n" + "".join(states))
-        return mav, epoch
-
     def test_import_tracks_and_odometry_keep_source_and_timestamps(self):
         from fusionlab.recordings.euroc import import_sequence
         from fusionlab.vision.feature_tracking import track_capture
@@ -100,7 +69,7 @@ class EurocBenchmarkTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source, epoch = self.fixture(root)
+            source, epoch = write_euroc_sequence(root)
             output = root / "imported"
             meta = import_sequence(source, output)
             self.assertEqual(meta["frames"], 8)
@@ -135,7 +104,7 @@ class EurocBenchmarkTests(unittest.TestCase):
         np = self.np
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source, epoch = self.fixture(root)
+            source, epoch = write_euroc_sequence(root)
             output = root / "imported"
             import_sequence(source, output)
             run = root / "run"
@@ -188,7 +157,7 @@ class EurocBenchmarkTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source, _ = self.fixture(root)
+            source, _ = write_euroc_sequence(root)
             with patch(
                 "sys.argv",
                 [
