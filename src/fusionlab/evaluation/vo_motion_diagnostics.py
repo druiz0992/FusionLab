@@ -15,10 +15,20 @@ import bisect
 import html
 import json
 import shutil
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import IO, TYPE_CHECKING, Any
 
 from fusionlab.vision.tracks import TrackFrame
+
+if TYPE_CHECKING:
+    from fusionlab._typing import Array
+    from fusionlab.vision.odometry.frame_result import FrameResult
+    from fusionlab.vision.odometry.visual_odometry import (
+        MonocularOdometry,
+        PnpSnapshot,
+    )
 
 # Method caveats saved with every report (what the numbers do not show).
 DIAGNOSTIC_LIMITS = (
@@ -70,19 +80,43 @@ CV_MAX_INTERVAL_S = 0.5
 HISTORY_MAX_GAP_NS = 500_000_000
 # Gyro integration refuses IMU sample gaps longer than this.
 MAX_IMU_GAP_S = 0.05
+# Predicted steps shorter than this (segment units) make innovation ratios unstable.
+MIN_PREDICTED_STEP = 1e-6
+# Hypotheses compared in the HTML table: (record key, label).
+HYPOTHESES = (
+    ("pnp", "Visual pose"),
+    ("constant_velocity", "Constant velocity"),
+    ("cv_translation_with_pnp_rotation", "CV translation + visual rotation"),
+)
+
+# IMU events of one (session ID, stream ID), and camera frame keys
+# (stream ID, source time, receive time) mapped to their session ID.
+ImuIndex = dict[tuple[str, str], list[dict[str, Any]]]
+CameraSessions = dict[tuple[str, int, int], str]
 
 
-def rotation_angle(rotation) -> float:
+@dataclass(frozen=True)
+class AcceptedPose:
+    """An accepted online pose, as constant-velocity prediction history."""
+
+    pose: Array  # 3×4 world-to-camera, segment frame
+    time_ns: int  # source time of the frame
+    segment: int  # VO segment; poses of different segments never mix
+
+
+def rotation_angle(rotation: Array) -> float:
     """Rotation magnitude in degrees, from trace(R) = 1 + 2 cos(theta)."""
     import numpy as np
 
     return float(np.degrees(np.arccos(np.clip((np.trace(rotation) - 1) / 2, -1, 1))))
 
 
-def predict_constant_velocity(history: list[dict[str, Any]], timestamp_ns: int):
+def predict_constant_velocity(
+    history: Sequence[AcceptedPose], timestamp_ns: int
+) -> Array | None:
     """Extrapolate camera center and SO(3) motion using source-time intervals.
 
-    history contains two accepted states from ONE contiguous segment. Calling
+    `history` ends with two accepted poses from ONE contiguous segment. Calling
     code resets it at loss, initialization, source-time discontinuity or stream
     changes. Predictions never feed back into the estimator. Returns a 3×4
     world-to-camera pose, or None when no valid prediction exists.
@@ -93,14 +127,14 @@ def predict_constant_velocity(history: list[dict[str, Any]], timestamp_ns: int):
     if len(history) < 2:
         return None
     first, last = history[-2:]
-    if first.get("segment") != last.get("segment"):
+    if first.segment != last.segment:
         return None
-    dt = (last["time"] - first["time"]) / 1e9
-    horizon = (timestamp_ns - last["time"]) / 1e9
+    dt = (last.time_ns - first.time_ns) / 1e9
+    horizon = (timestamp_ns - last.time_ns) / 1e9
     if dt <= 0 or horizon <= 0 or max(dt, horizon) > CV_MAX_INTERVAL_S:
         return None
     ratio = horizon / dt
-    poses = [np.asarray(state["pose"]) for state in (first, last)]
+    poses = [np.asarray(state.pose) for state in (first, last)]
     centers = [-pose[:, :3].T @ pose[:, 3] for pose in poses]
     center = centers[1] + (centers[1] - centers[0]) * ratio
     # Scale the last rotation increment (as a rotation vector) to the horizon.
@@ -109,7 +143,9 @@ def predict_constant_velocity(history: list[dict[str, Any]], timestamp_ns: int):
     return np.column_stack((rotation, -rotation @ center))
 
 
-def spatial_distribution(pixels, size) -> dict[str, Any]:
+def spatial_distribution(
+    pixels: Array | Sequence[Sequence[float]], size: Sequence[int]
+) -> dict[str, Any]:
     """Coverage and clustering in original tracking pixels, independent of pose.
 
     Reports occupied cells of a 4×4 grid, the convex hull as a fraction of the
@@ -151,21 +187,25 @@ def spatial_distribution(pixels, size) -> dict[str, Any]:
     }
 
 
-def evaluate_pose(pose, snapshot: dict[str, Any], pixels, size) -> dict[str, Any]:
+def evaluate_pose(
+    pose: Array, snapshot: PnpSnapshot, pixels: Array, size: Sequence[int]
+) -> dict[str, Any]:
     """Identical pre-update landmarks and gates for every pose hypothesis.
 
-    Reprojection errors are normalized-coordinate errors times the mean tracking
-    focal length (approximate pixels); depth quantiles are in segment units.
+    `pixels` are the snapshot landmarks' tracking-pixel positions (for spatial
+    coverage), row for row. Reprojection errors are normalized-coordinate errors
+    times the mean tracking focal length (approximate pixels); depth quantiles
+    are in segment units.
     """
     import numpy as np
 
-    camera = snapshot["objects"] @ pose[:, :3].T + pose[:, 3]
+    camera = snapshot.objects @ pose[:, :3].T + pose[:, 3]
     valid = (camera[:, 2] > MIN_DEPTH) & np.isfinite(camera).all(axis=1)
-    focal = float((snapshot["camera"][0, 0] + snapshot["camera"][1, 1]) / 2)
+    focal = float((snapshot.camera[0, 0] + snapshot.camera[1, 1]) / 2)
     errors = np.full(len(camera), np.inf)
     errors[valid] = (
         np.linalg.norm(
-            camera[valid, :2] / camera[valid, 2, None] - snapshot["normalized"][valid],
+            camera[valid, :2] / camera[valid, 2, None] - snapshot.normalized[valid],
             axis=1,
         )
         * focal
@@ -195,13 +235,14 @@ def gyro_interval(
     start_ns: int,
     end_ns: int,
     *,
-    camera_from_imu=None,
-    visual_rotation=None,
+    camera_from_imu: Array | None = None,
+    visual_rotation: Array | None = None,
     offset_ns: int = 0,
 ) -> dict[str, Any]:
     """Midpoint gyro integration with interpolated endpoints on source timestamps.
 
-    Offset is added to camera times to index IMU time. Without extrinsics, only
+    Offset is added to camera times to index IMU time. `visual_rotation` is the
+    camera rotation from start to end (R_end_start). Without extrinsics, only
     rotation magnitudes can be compared. Exact clock alignment is NOT established.
     Gyro rates are assumed to be rad/s in the IMU body frame.
     """
@@ -229,7 +270,7 @@ def gyro_interval(
     if not np.isfinite(rates).all():
         return {"status": "nonfinite_gyro"}
     body_start_from_end = _integrate_gyro(relative_times, rates, end_ns - start_ns)
-    report = {
+    report: dict[str, Any] = {
         "status": "available_assuming_source_clock_alignment",
         "gyro_angle_deg": rotation_angle(body_start_from_end),
         "interval_s": (end_ns - start_ns) / 1e9,
@@ -252,8 +293,13 @@ def gyro_interval(
     return report
 
 
-def _integrate_gyro(relative_times, rates, duration_ns: int):
-    """Compose midpoint rotations over the interval, with interpolated endpoints."""
+def _integrate_gyro(relative_times: Array, rates: Array, duration_ns: int) -> Array:
+    """Compose midpoint rotations over the interval, with interpolated endpoints.
+
+    `relative_times` are ns from the interval start and `rates` rad/s per axis.
+    Each sub-interval rotates by its midpoint rate times its duration; the
+    product maps end-of-interval body vectors into the start body frame.
+    """
     import cv2
     import numpy as np
 
@@ -272,14 +318,14 @@ def _integrate_gyro(relative_times, rates, duration_ns: int):
     return body_start_from_end
 
 
+@dataclass(frozen=True)
 class _ReplayContext:
     """Inputs shared by every frame of a diagnostic replay."""
 
-    def __init__(self, imu, camera_sessions, camera_from_imu, offset_ns: int):
-        self.imu = imu  # (session, stream) -> IMU events
-        self.camera_sessions = camera_sessions  # (stream, source, receive) -> session
-        self.camera_from_imu = camera_from_imu  # 3×3 or None
-        self.offset_ns = offset_ns
+    imu: ImuIndex
+    camera_sessions: CameraSessions
+    camera_from_imu: Array | None  # 3×3 rotation, only if explicitly supplied
+    offset_ns: int  # added to camera source times to index IMU time
 
 
 def diagnose_run(
@@ -287,10 +333,14 @@ def diagnose_run(
     capture: Path,
     output: Path,
     *,
-    camera_from_imu=None,
+    camera_from_imu: Array | Sequence[Sequence[float]] | None = None,
     imu_offset_ms: float = 0.0,
 ) -> dict[str, Any]:
-    """Reproduce a saved estimator run to access pre-update landmark snapshots."""
+    """Reproduce a saved estimator run to access pre-update landmark snapshots.
+
+    Writes `summary.json`, `frames.jsonl`, `ranked_events.json`, `index.html`
+    and the findings files into the new directory `output`; returns the summary.
+    """
     import numpy as np
     from fusionlab.evaluation.vo_evaluation import inspect_translation_jumps
 
@@ -307,13 +357,7 @@ def diagnose_run(
         imu, camera_sessions, camera_from_imu, round(imu_offset_ms * 1e6)
     )
     rows, mismatches = _replay_frames(tracker, tracks, saved, output, context)
-    # Rank CV innovations, but separately flag old step ratios whose denominator
-    # can be small during stops. Neither is treated as ground truth.
-    innovations = sorted(
-        [r for r in rows if r.get("innovation_over_predicted_step") is not None],
-        key=lambda r: r["innovation_over_predicted_step"],
-        reverse=True,
-    )
+    innovations = _ranked_innovations(rows)
     losses = [r for r in rows if r["status"] == "tracking_lost"]
     summary = {
         "frames": len(rows),
@@ -344,7 +388,22 @@ def diagnose_run(
     return summary
 
 
-def _checked_camera_from_imu(camera_from_imu):
+def _ranked_innovations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Frames with a CV innovation ratio, largest first.
+
+    Step ratios from older runs, whose denominator can be small during stops,
+    are flagged separately; neither ranking is treated as ground truth.
+    """
+    return sorted(
+        [r for r in rows if r.get("innovation_over_predicted_step") is not None],
+        key=lambda r: r["innovation_over_predicted_step"],
+        reverse=True,
+    )
+
+
+def _checked_camera_from_imu(
+    camera_from_imu: Array | Sequence[Sequence[float]] | None,
+) -> Array | None:
     """A proper 3×3 rotation array, or None; never an assumed identity."""
     import numpy as np
 
@@ -361,7 +420,7 @@ def _checked_camera_from_imu(camera_from_imu):
     return camera_from_imu
 
 
-def _rebuild_estimator(config: dict[str, Any]):
+def _rebuild_estimator(config: dict[str, Any]) -> MonocularOdometry:
     """A fresh estimator with the saved run's calibration, policies and seed."""
     import cv2
     from fusionlab.vision.odometry.visual_odometry import MonocularOdometry
@@ -383,12 +442,12 @@ def _saved_results(run_dir: Path) -> dict[int, dict[str, Any]]:
         return {r["frame_index"]: r for line in file if (r := json.loads(line))}
 
 
-def _index_capture(capture: Path):
+def _index_capture(capture: Path) -> tuple[ImuIndex, CameraSessions]:
     """IMU events per (session, stream) and the session of every camera frame."""
     with (capture / "events.jsonl").open() as file:
         events = [json.loads(line) for line in file]
-    imu: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    camera_sessions: dict[tuple[str, int, int], str] = {}
+    imu: ImuIndex = {}
+    camera_sessions: CameraSessions = {}
     for event in events:
         if event["type"] == "ImuSample":
             imu.setdefault((event["session_id"], event["stream_id"]), []).append(event)
@@ -402,49 +461,70 @@ def _index_capture(capture: Path):
     return imu, camera_sessions
 
 
-def _replay_frames(tracker, tracks: Path, saved, output: Path, context):
+def _replay_frames(
+    tracker: MonocularOdometry,
+    tracks: Path,
+    saved: dict[int, dict[str, Any]],
+    output: Path,
+    context: _ReplayContext,
+) -> tuple[list[dict[str, Any]], list[int]]:
     """Replay saved frames, writing one diagnostic record per frame.
 
     Returns (records, frame indices whose replay differs from the saved run).
     """
-    history: list[dict[str, Any]] = []
+    with tracks.open() as file, (output / "frames.jsonl").open("x") as report_file:
+        return _replay_rows(tracker, file, saved, report_file, context)
+
+
+def _replay_rows(
+    tracker: MonocularOdometry,
+    tracks_file: IO[str],
+    saved: dict[int, dict[str, Any]],
+    report_file: IO[str],
+    context: _ReplayContext,
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """Process each saved frame, then score its hypotheses; see `_replay_frames`.
+
+    CV history restarts at every geometry (stream/segment/size) change, so a
+    prediction never spans a tracker reset.
+    """
+    history: list[AcceptedPose] = []
     last_geometry = None
     rows: list[dict[str, Any]] = []
     mismatches: list[int] = []
     origin = None
-    with tracks.open() as file, (output / "frames.jsonl").open("x") as report_file:
-        for index, line in enumerate(file):
-            if index not in saved:
-                continue
-            row = TrackFrame.from_json(json.loads(line))
-            if row.geometry_key != last_geometry:
-                history = []
-            last_geometry = row.geometry_key
-            result = tracker.process(row)
-            if not _reproduces(result, saved[index]):
-                mismatches.append(index)
-            if origin is None:
-                origin = row.received_monotonic_ns
-            item = _frame_record(index, row, result, origin)
-            history = _continuous_history(history, result, row)
-            snapshot = tracker.last_pnp_snapshot
-            candidate = _candidate_pose(result, snapshot)
-            prediction = predict_constant_velocity(history, row.source_time_ns)
-            if snapshot is not None:
-                _compare_hypotheses(
-                    item, row, result, snapshot, candidate, prediction, history
-                )
-            if history and candidate is not None:
-                item["gyro"] = _gyro_comparison(context, row, candidate, history)
-            report_file.write(json.dumps(item, allow_nan=False) + "\n")
-            rows.append(item)
-            history = _advance_history(history, result, candidate, row)
-            if len(rows) % 100 == 0:
-                print(f"Diagnosed {len(rows)}/{len(saved)} frames", flush=True)
+    for index, line in enumerate(tracks_file):
+        if index not in saved:
+            continue
+        row = TrackFrame.from_json(json.loads(line))
+        if row.geometry_key != last_geometry:
+            history = []
+        last_geometry = row.geometry_key
+        result = tracker.process(row)
+        if not _reproduces(result, saved[index]):
+            mismatches.append(index)
+        if origin is None:
+            origin = row.received_monotonic_ns
+        item = _frame_record(index, row, result, origin)
+        history = _continuous_history(history, result, row)
+        snapshot = tracker.last_pnp_snapshot
+        candidate = _candidate_pose(result, snapshot)
+        prediction = predict_constant_velocity(history, row.source_time_ns)
+        if snapshot is not None:
+            _compare_hypotheses(
+                item, row, result, snapshot, candidate, prediction, history
+            )
+        if history and candidate is not None:
+            item["gyro"] = _gyro_comparison(context, row, candidate, history)
+        report_file.write(json.dumps(item, allow_nan=False) + "\n")
+        rows.append(item)
+        history = _advance_history(history, result, candidate, row)
+        if len(rows) % 100 == 0:
+            print(f"Diagnosed {len(rows)}/{len(saved)} frames", flush=True)
     return rows, mismatches
 
 
-def _reproduces(result, saved: dict[str, Any]) -> bool:
+def _reproduces(result: FrameResult, saved: dict[str, Any]) -> bool:
     """Same status and segment, and (when tracking) the same pose to 1e-8."""
     import numpy as np
 
@@ -452,6 +532,8 @@ def _reproduces(result, saved: dict[str, Any]) -> bool:
         return False
     if result.status != "tracking":
         return True
+    if result.world_to_camera is None:
+        return False
     return bool(
         np.allclose(
             result.world_to_camera, saved["world_to_camera"], atol=1e-8, rtol=1e-8
@@ -459,7 +541,9 @@ def _reproduces(result, saved: dict[str, Any]) -> bool:
     )
 
 
-def _frame_record(index: int, row: TrackFrame, result, origin: int) -> dict[str, Any]:
+def _frame_record(
+    index: int, row: TrackFrame, result: FrameResult, origin: int
+) -> dict[str, Any]:
     """Identity, status and timing fields that start every frame record."""
     return {
         "frame_index": index,
@@ -472,33 +556,44 @@ def _frame_record(index: int, row: TrackFrame, result, origin: int) -> dict[str,
     }
 
 
-def _continuous_history(history, result, row: TrackFrame):
+def _continuous_history(
+    history: list[AcceptedPose], result: FrameResult, row: TrackFrame
+) -> list[AcceptedPose]:
     """Drop history across a segment change or a source-time discontinuity."""
     if history and (
-        history[-1]["segment"] != result.segment
-        or not 0 < row.source_time_ns - history[-1]["time"] <= HISTORY_MAX_GAP_NS
+        history[-1].segment != result.segment
+        or not 0 < row.source_time_ns - history[-1].time_ns <= HISTORY_MAX_GAP_NS
     ):
         return []
     return history
 
 
-def _candidate_pose(result, snapshot):
+def _candidate_pose(result: FrameResult, snapshot: PnpSnapshot | None) -> Array | None:
     """The accepted pose when tracking, else the raw RANSAC candidate if any."""
     import numpy as np
 
     if result.status == "tracking":
         return np.asarray(result.world_to_camera)
-    return snapshot.get("candidate_pose") if snapshot else None
+    return snapshot.candidate_pose if snapshot else None
 
 
-def _compare_hypotheses(item, row, result, snapshot, candidate, prediction, history):
-    """Score PnP, CV and CV-translation hypotheses on the shared snapshot."""
+def _compare_hypotheses(
+    item: dict[str, Any],
+    row: TrackFrame,
+    result: FrameResult,
+    snapshot: PnpSnapshot,
+    candidate: Array | None,
+    prediction: Array | None,
+    history: list[AcceptedPose],
+) -> None:
+    """Score PnP, CV and CV-translation hypotheses on the shared snapshot.
+
+    Results are added to `item` in place, in the saved `frames.jsonl` order.
+    """
     import numpy as np
 
     lookup = row.positions()
-    pixels = np.array([lookup[key] for key in snapshot["ids"]], dtype=float).reshape(
-        -1, 2
-    )
+    pixels = np.array([lookup[key] for key in snapshot.ids], dtype=float).reshape(-1, 2)
     item["candidate_spatial"] = spatial_distribution(pixels, row.tracking_size)
     item["map_basis"] = MAP_BASIS
     if candidate is not None:
@@ -522,7 +617,15 @@ def _compare_hypotheses(item, row, result, snapshot, candidate, prediction, hist
         )
 
 
-def _innovation(item, candidate, prediction, history, snapshot, pixels, row):
+def _innovation(
+    item: dict[str, Any],
+    candidate: Array,
+    prediction: Array,
+    history: list[AcceptedPose],
+    snapshot: PnpSnapshot,
+    pixels: Array,
+    row: TrackFrame,
+) -> dict[str, Any]:
     """How far the PnP pose departs from the CV prediction.
 
     The translation innovation is normalized by the predicted step so it is
@@ -534,7 +637,8 @@ def _innovation(item, candidate, prediction, history, snapshot, pixels, row):
     predicted_center = np.asarray(item["predicted_center_arbitrary"])
     center = -candidate[:, :3].T @ candidate[:, 3]
     innovation = float(np.linalg.norm(center - predicted_center))
-    last_center = -history[-1]["pose"][:, :3].T @ history[-1]["pose"][:, 3]
+    last_pose = history[-1].pose
+    last_center = -last_pose[:, :3].T @ last_pose[:, 3]
     expected_step = float(np.linalg.norm(predicted_center - last_center))
     translation_only = np.column_stack(
         (candidate[:, :3], -candidate[:, :3] @ predicted_center)
@@ -542,7 +646,7 @@ def _innovation(item, candidate, prediction, history, snapshot, pixels, row):
     return {
         "translation_innovation_arbitrary": innovation,
         "innovation_over_predicted_step": (
-            innovation / expected_step if expected_step > 1e-6 else None
+            innovation / expected_step if expected_step > MIN_PREDICTED_STEP else None
         ),
         "predicted_step_arbitrary": expected_step,
         "rotation_prediction_error_deg": rotation_angle(
@@ -554,18 +658,26 @@ def _innovation(item, candidate, prediction, history, snapshot, pixels, row):
     }
 
 
-def _gyro_comparison(context, row: TrackFrame, candidate, history):
-    """Gyro vs. visual rotation since the previous accepted frame."""
+def _gyro_comparison(
+    context: _ReplayContext,
+    row: TrackFrame,
+    candidate: Array,
+    history: list[AcceptedPose],
+) -> dict[str, Any]:
+    """Gyro vs. visual rotation since the previous accepted frame.
+
+    The IMU stream must be the only one recorded in this camera frame's session.
+    """
     session = context.camera_sessions.get(
         (row.stream_id, row.source_time_ns, row.received_monotonic_ns)
     )
     streams = [samples for (sid, _), samples in context.imu.items() if sid == session]
     if len(streams) != 1:
         return {"status": "missing_or_ambiguous_session_imu"}
-    visual = candidate[:, :3] @ history[-1]["pose"][:, :3].T
+    visual = candidate[:, :3] @ history[-1].pose[:, :3].T
     return gyro_interval(
         streams[0],
-        history[-1]["time"],
+        history[-1].time_ns,
         row.source_time_ns,
         camera_from_imu=context.camera_from_imu,
         visual_rotation=visual,
@@ -573,21 +685,26 @@ def _gyro_comparison(context, row: TrackFrame, candidate, history):
     )
 
 
-def _advance_history(history, result, candidate, row: TrackFrame):
+def _advance_history(
+    history: list[AcceptedPose],
+    result: FrameResult,
+    candidate: Array | None,
+    row: TrackFrame,
+) -> list[AcceptedPose]:
     """Keep the two latest accepted poses; any non-tracking frame clears them."""
-    if result.status != "tracking":
+    if result.status != "tracking" or candidate is None:
         return []
-    history.append(
-        {
-            "pose": candidate.copy(),
-            "time": row.source_time_ns,
-            "segment": result.segment,
-        }
-    )
+    history.append(AcceptedPose(candidate.copy(), row.source_time_ns, result.segment))
     return history[-2:]
 
 
-def _write_html(output: Path, tracks_root: Path, jumps, losses, summary) -> None:
+def _write_html(
+    output: Path,
+    tracks_root: Path,
+    jumps: list[dict[str, Any]],
+    losses: list[dict[str, Any]],
+    summary: dict[str, Any],
+) -> None:
     """Self-contained index with local frame images and exact replay timestamps."""
     (output / "frames").mkdir(exist_ok=True)
     body = [
@@ -602,49 +719,63 @@ def _write_html(output: Path, tracks_root: Path, jumps, losses, summary) -> None
     ]:
         body.append("<h2>" + title + "</h2>")
         for item in events:
-            body.append(
-                f"<article><h3>Frame {item['frame_index']} · {item['receive_elapsed_s']:.2f} s · segment {item['segment']}</h3>"
-            )
-            if item.get("overlay_path"):
-                source = (tracks_root / item["overlay_path"]).resolve()
-                if not source.is_relative_to(tracks_root.resolve()):
-                    raise ValueError("Overlay escapes tracking folder")
-                if source.exists():
-                    target = f"frames/{item['frame_index']:06d}.jpg"
-                    shutil.copyfile(source, output / target)
-                    body.append(f'<img src="{target}" alt="Tracked camera frame">')
-            body.append(
-                '<table border="1" cellpadding="5"><tr><th>Hypothesis</th><th>Inliers / candidates</th><th>Median error (px)</th><th>Coverage</th><th>Grid cells / 16</th></tr>'
-            )
-            for key, label in (
-                ("pnp", "Visual pose"),
-                ("constant_velocity", "Constant velocity"),
-                (
-                    "cv_translation_with_pnp_rotation",
-                    "CV translation + visual rotation",
-                ),
-            ):
-                metrics = item.get(key)
-                if metrics is None:
-                    continue
-                spatial = metrics["inlier_spatial"]
-                error = metrics["median_error_px"]
-                error_text = f"{error:.2f}" if error is not None else "unavailable"
-                body.append(
-                    f"<tr><td>{label}</td><td>{metrics['inliers_3px']} / {metrics['candidates']}</td><td>{error_text}</td><td>{100*spatial['hull_fraction']:.1f}%</td><td>{spatial['occupied_grid_cells']}</td></tr>"
-                )
-            body.append("</table>")
-            gyro = item.get("gyro", {})
-            if "angle_magnitude_difference_deg" in gyro:
-                body.append(
-                    f"<p>Visual rotation {gyro['visual_angle_deg']:.2f}°; gyro rotation {gyro['gyro_angle_deg']:.2f}°. Magnitudes only; source-time alignment assumed.</p>"
-                )
-            body.append(
-                "<details><summary>Full diagnostic record</summary><pre>"
-                + html.escape(json.dumps(item, indent=2))
-                + "</pre></details></article>"
-            )
+            body += _html_event(output, tracks_root, item)
     (output / "index.html").write_text("\n".join(body))
+
+
+def _html_event(output: Path, tracks_root: Path, item: dict[str, Any]) -> list[str]:
+    """One frame's article: heading, overlay, hypothesis table, gyro, raw record."""
+    lines = [
+        f"<article><h3>Frame {item['frame_index']} · {item['receive_elapsed_s']:.2f} s · segment {item['segment']}</h3>"
+    ]
+    image = _copy_overlay(output, tracks_root, item)
+    if image is not None:
+        lines.append(f'<img src="{image}" alt="Tracked camera frame">')
+    lines += _hypothesis_table(item)
+    gyro = item.get("gyro", {})
+    if "angle_magnitude_difference_deg" in gyro:
+        lines.append(
+            f"<p>Visual rotation {gyro['visual_angle_deg']:.2f}°; gyro rotation {gyro['gyro_angle_deg']:.2f}°. Magnitudes only; source-time alignment assumed.</p>"
+        )
+    lines.append(
+        "<details><summary>Full diagnostic record</summary><pre>"
+        + html.escape(json.dumps(item, indent=2))
+        + "</pre></details></article>"
+    )
+    return lines
+
+
+def _copy_overlay(output: Path, tracks_root: Path, item: dict[str, Any]) -> str | None:
+    """Copy the frame's tracking overlay into `frames/`; its relative path or None."""
+    if not item.get("overlay_path"):
+        return None
+    source = (tracks_root / item["overlay_path"]).resolve()
+    if not source.is_relative_to(tracks_root.resolve()):
+        raise ValueError("Overlay escapes tracking folder")
+    if not source.exists():
+        return None
+    target = f"frames/{item['frame_index']:06d}.jpg"
+    shutil.copyfile(source, output / target)
+    return target
+
+
+def _hypothesis_table(item: dict[str, Any]) -> list[str]:
+    """Support, error and coverage of each scored hypothesis, as table rows."""
+    lines = [
+        '<table border="1" cellpadding="5"><tr><th>Hypothesis</th><th>Inliers / candidates</th><th>Median error (px)</th><th>Coverage</th><th>Grid cells / 16</th></tr>'
+    ]
+    for key, label in HYPOTHESES:
+        metrics = item.get(key)
+        if metrics is None:
+            continue
+        spatial = metrics["inlier_spatial"]
+        error = metrics["median_error_px"]
+        error_text = f"{error:.2f}" if error is not None else "unavailable"
+        lines.append(
+            f"<tr><td>{label}</td><td>{metrics['inliers_3px']} / {metrics['candidates']}</td><td>{error_text}</td><td>{100*spatial['hull_fraction']:.1f}%</td><td>{spatial['occupied_grid_cells']}</td></tr>"
+        )
+    lines.append("</table>")
+    return lines
 
 
 def write_findings(output: Path) -> dict[str, Any]:
@@ -760,7 +891,8 @@ def _plot_motion_checks(rows: list[dict[str, Any]], path: Path) -> None:
     axes = figure.subplots(5, 1, sharex=True)
     times = [r["receive_elapsed_s"] for r in rows]
 
-    def metric(key, name):
+    def metric(key: str, name: str) -> list[float]:
+        """One nested value per row, NaN (a plot gap) where absent."""
         value = [r.get(key, {}).get(name) for r in rows]
         return [np.nan if v is None else v for v in value]
 

@@ -69,7 +69,10 @@ class SegmentBoundary(Update):
     reason: str
 
 
-Message = ScalarSample | OrientationSample | ImageSample | DepthSample | SegmentBoundary
+# Sensor-level messages; the 2D estimate/map messages are added below.
+_SensorMessage = (
+    ScalarSample | OrientationSample | ImageSample | DepthSample | SegmentBoundary
+)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -105,4 +108,5 @@ class Particles2D(Update):
     weights: tuple[float, ...]
 
 
-Message = Message | Map2D | Pose2D | Trajectory2D | Particles2D
+# Every message type a viewer client accepts.
+Message = _SensorMessage | Map2D | Pose2D | Trajectory2D | Particles2D

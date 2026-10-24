@@ -94,11 +94,9 @@ class VisualOdometryTests(unittest.TestCase):
         b = {i: (p + [-1, 0, 0])[:2] / p[2] for i, p in enumerate(points)}
         vo._triangulate(a, pose_a, b, pose_b, 500.0)
         self.assertEqual(set(vo.landmarks), {0})
-        self.assertEqual(vo.triangulation_diagnostics["accepted"], 1)
-        self.assertEqual(vo.triangulation_diagnostics["low_parallax"], 1)
-        self.assertEqual(
-            vo.triangulation_diagnostics["invalid_depth_or_homogeneous"], 1
-        )
+        self.assertEqual(vo.triangulation_diagnostics.accepted, 1)
+        self.assertEqual(vo.triangulation_diagnostics.low_parallax, 1)
+        self.assertEqual(vo.triangulation_diagnostics.invalid_depth_or_homogeneous, 1)
 
     def test_keyframe_policy_waits_for_translation_and_preserves_tracks(self):
         from fusionlab.vision.odometry.policies import choose_keyframe
@@ -131,52 +129,3 @@ class VisualOdometryTests(unittest.TestCase):
         row["source_time_ns"] = 100_000_000
         self.assertEqual(vo.process(TrackFrame.from_json(row)).status, "initializing")
         self.assertIsNone(vo.pose)
-
-    def test_refinement_improves_known_pose_and_rejects_random_matches(self):
-        from fusionlab.vision.odometry.visual_odometry import refine_pose_support
-
-        np, cv = self.np, self.cv
-        rng = np.random.default_rng(55)
-        objects = rng.uniform([-2, -1, 4], [2, 1, 9], (100, 3))
-        truth_rotation = np.array([0.02, -0.04, 0.01])
-        truth_translation = np.array([0.2, -0.03, 0.01])
-        pixels, _ = cv.projectPoints(
-            objects, truth_rotation, truth_translation, np.eye(3), None
-        )
-        pixels = pixels.reshape(-1, 2) + rng.normal(0, 0.15 / 500, (100, 2))
-        seed_rotation = truth_rotation + np.array([0.01, -0.01, 0.01])
-        seed_translation = truth_translation + np.array([0.03, -0.02, 0.02])
-        rotation_copy = seed_rotation.copy()
-        translation_copy = seed_translation.copy()
-        before, _ = cv.projectPoints(
-            objects, seed_rotation, seed_translation, np.eye(3), None
-        )
-        ok, rotation, translation, support = refine_pose_support(
-            objects,
-            pixels,
-            seed_rotation,
-            seed_translation,
-            np.arange(100).reshape(-1, 1),
-            500.0,
-        )
-        self.assertTrue(ok)
-        after, _ = cv.projectPoints(objects, rotation, translation, np.eye(3), None)
-        self.assertLess(
-            np.mean((after.reshape(-1, 2) - pixels) ** 2),
-            np.mean((before.reshape(-1, 2) - pixels) ** 2),
-        )
-        np.testing.assert_allclose(rotation.ravel(), truth_rotation, atol=0.002)
-        np.testing.assert_allclose(translation.ravel(), truth_translation, atol=0.005)
-        np.testing.assert_array_equal(seed_rotation, rotation_copy)
-        np.testing.assert_array_equal(seed_translation, translation_copy)
-        self.assertEqual(len(support), 100)
-        random_pixels = rng.uniform(-0.5, 0.5, (100, 2))
-        _, _, _, bad_support = refine_pose_support(
-            objects,
-            random_pixels,
-            seed_rotation,
-            seed_translation,
-            np.arange(100).reshape(-1, 1),
-            500.0,
-        )
-        self.assertLess(len(bad_support), 20)

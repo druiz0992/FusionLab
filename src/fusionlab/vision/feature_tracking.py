@@ -10,14 +10,19 @@ them in the viewer. Coordinates are resized, unrotated tracking pixels (+X right
 from __future__ import annotations
 
 import json
-from contextlib import ExitStack
+from collections.abc import Callable
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from math import isfinite
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fusionlab.vision.tracks import TrackFrame
+
+if TYPE_CHECKING:
+    from fusion_viewer import ViewerClient
+    from fusionlab._typing import Array
 
 # Method caveats saved with every report (what the numbers do not show).
 TRACKING_SCOPE = (
@@ -39,6 +44,11 @@ DISPLAY_ROTATIONS = (0, 90, 180, 270)
 SURVIVING_COLOR = (0, 220, 0)
 NEW_COLOR = (0, 160, 255)
 TEXT_COLOR = (255, 255, 255)
+
+# A surviving track's motion this frame: ((x0, y0), (x1, y1)) tracking pixels.
+Trail = tuple[tuple[float, float], tuple[float, float]]
+# Opens a viewer for the duration of one tracking run and closes it after.
+ViewerFactory = Callable[[], AbstractContextManager["ViewerClient"]]
 
 
 @dataclass(frozen=True)
@@ -62,6 +72,16 @@ class TrackingConfig:
                 raise ValueError("Thresholds must be finite and positive")
 
 
+@dataclass(frozen=True)
+class _FlowOutcome:
+    """How existing tracks fared when followed into a new frame."""
+
+    rejected_flow: int  # failed LK status, round trip or image bounds
+    rejected_geometry: int  # fundamental-matrix RANSAC outliers
+    geometry_status: str  # not_attempted / insufficient_correspondences / ...
+    trails: list[Trail]
+
+
 class FeatureTracker:
     """Sequential grayscale frames; IDs never reused, even across resets.
 
@@ -74,7 +94,7 @@ class FeatureTracker:
     `ids` and `ages` are parallel lists, filtered together with `points`.
     """
 
-    def __init__(self, config: TrackingConfig = TrackingConfig()):
+    def __init__(self, config: TrackingConfig = TrackingConfig()) -> None:
         config.validate()
         try:
             import cv2  # noqa: F401  (checked here; imported where used)
@@ -84,16 +104,18 @@ class FeatureTracker:
                 'Install tracking support: pip install -e ".[tracking]"'
             ) from exc
         self.config = config
-        self.previous = None  # last grayscale frame
-        self.points = None
+        self.previous: Array | None = None  # last grayscale frame
+        self.points: Array | None = None
         self.ids: list[int] = []
         self.ages: list[int] = []
         self.next_id = 0
-        self.key = None  # stream ID of the last frame
+        self.key: str | None = None  # stream ID of the last frame
         self.time: int | None = None  # source time of the last frame, ns
         self.segment = 0
 
-    def process(self, gray, *, stream_id: str, source_time_ns: int):
+    def process(
+        self, gray: Array, *, stream_id: str, source_time_ns: int
+    ) -> tuple[dict[str, Any], list[Trail]]:
         """Advance one frame; return track diagnostics and accepted motion lines.
 
         Track coordinates use resized, unrotated pixels. OpenCV stores point
@@ -107,18 +129,14 @@ class FeatureTracker:
             raise ValueError("Expected uint8 grayscale image")
         reason = self._reset_reason(gray, stream_id, source_time_ns)
         previous_feature_count = 0 if reason else len(self.ids)
-        rejected_flow = rejected_geometry = 0
-        geometry_status = "not_attempted"
-        trails: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        flow = _FlowOutcome(0, 0, "not_attempted", [])
         if reason:
             self.segment += 1
             self.points = None
             self.ids = []
             self.ages = []
-        elif self.points is not None and len(self.points):
-            rejected_flow, rejected_geometry, geometry_status, trails = (
-                self._track_existing(gray)
-            )
+        elif self.previous is not None and self.points is not None and len(self.points):
+            flow = self._track_existing(self.previous, self.points, gray)
         tracked = len(self.ids)
         added = self._replenish(gray, tracked)
         self.previous = gray.copy()
@@ -129,16 +147,18 @@ class FeatureTracker:
             "reset_reason": reason,
             "previous_features": previous_feature_count,
             "tracked": tracked,
-            "rejected_flow": rejected_flow,
-            "rejected_geometry": rejected_geometry,
-            "geometry_status": geometry_status,
+            "rejected_flow": flow.rejected_flow,
+            "rejected_geometry": flow.rejected_geometry,
+            "geometry_status": flow.geometry_status,
             "added": added,
             "tracks": self._track_rows(),
-        }, trails
+        }, flow.trails
 
-    def _reset_reason(self, gray, stream_id: str, source_time_ns: int) -> str | None:
+    def _reset_reason(
+        self, gray: Array, stream_id: str, source_time_ns: int
+    ) -> str | None:
         """Why correspondence history cannot continue into this frame, if so."""
-        if self.previous is None:
+        if self.previous is None or self.time is None:
             return "first_frame"
         if stream_id != self.key:
             return "stream_changed"
@@ -150,25 +170,22 @@ class FeatureTracker:
             return "timestamp_gap"
         return None
 
-    def _track_existing(self, gray):
-        """Follow current tracks into `gray`; drop failures, keep identities.
-
-        Returns (rejected_flow, rejected_geometry, geometry_status, trails).
-        """
+    def _track_existing(
+        self, previous_gray: Array, previous_points: Array, gray: Array
+    ) -> _FlowOutcome:
+        """Follow current tracks into `gray`; drop failures, keep identities."""
         import numpy as np
 
-        previous_points = self.points
-        current_points, accepted_mask = self._flow_survivors(previous_points, gray)
+        current_points, accepted_mask = self._flow_survivors(
+            previous_gray, previous_points, gray
+        )
         rejected_flow = int((~accepted_mask).sum())
         rejected_geometry, geometry_status = self._geometric_filter(
             previous_points, current_points, accepted_mask
         )
         accepted_indexes = np.flatnonzero(accepted_mask)
         trails = [
-            (
-                tuple(map(float, previous_points[j, 0])),
-                tuple(map(float, current_points[j, 0])),
-            )
+            _trail(previous_points[j, 0], current_points[j, 0])
             for j in accepted_indexes
         ]
         self.points = (
@@ -180,20 +197,23 @@ class FeatureTracker:
         # survives rejection without shifting onto another feature.
         self.ids = [self.ids[j] for j in accepted_indexes]
         self.ages = [self.ages[j] + 1 for j in accepted_indexes]
-        return rejected_flow, rejected_geometry, geometry_status, trails
+        return _FlowOutcome(rejected_flow, rejected_geometry, geometry_status, trails)
 
-    def _flow_survivors(self, previous_points, gray):
+    def _flow_survivors(
+        self, previous_gray: Array, previous_points: Array, gray: Array
+    ) -> tuple[Array, Array]:
         """LK flow forward and back; keep valid, in-bounds round trips.
 
         Returns (current_points, accepted_mask). A reliable match should return
         close to its original location when tracked backward; the round-trip
-        error is measured in tracking pixels.
+        error is measured in tracking pixels. If OpenCV returns no forward
+        points, the previous positions stand in, all marked rejected.
         """
         import cv2 as cv
         import numpy as np
 
         current_points, status, _ = cv.calcOpticalFlowPyrLK(
-            self.previous,
+            previous_gray,
             gray,
             previous_points,
             None,
@@ -202,14 +222,14 @@ class FeatureTracker:
         )
         accepted_mask = np.zeros(len(previous_points), dtype=bool)
         if current_points is None or status is None:
-            return current_points, accepted_mask
+            return previous_points.copy(), accepted_mask
         # Invalid forward results still need safe coordinates for the backward
         # call; their status mask prevents accepting them.
         backward_candidates = current_points.copy()
         backward_candidates[~np.isfinite(backward_candidates)] = 0
         backward_points, backward_status, _ = cv.calcOpticalFlowPyrLK(
             gray,
-            self.previous,
+            previous_gray,
             backward_candidates,
             None,
             winSize=LK_WINDOW_PX,
@@ -235,7 +255,9 @@ class FeatureTracker:
         )
         return current_points, accepted_mask
 
-    def _geometric_filter(self, previous_points, current_points, accepted_mask):
+    def _geometric_filter(
+        self, previous_points: Array, current_points: Array, accepted_mask: Array
+    ) -> tuple[int, str]:
         """Fundamental-matrix RANSAC on flow survivors; updates `accepted_mask`.
 
         Geometry is a second rejection stage, after round-trip checks. A failed
@@ -266,8 +288,11 @@ class FeatureTracker:
         accepted_mask[outlier_indexes] = False
         return len(outlier_indexes), "ransac_applied"
 
-    def _replenish(self, gray, tracked: int) -> int:
-        """Detect new corners away from existing tracks; returns how many."""
+    def _replenish(self, gray: Array, tracked: int) -> int:
+        """Detect new Shi–Tomasi corners away from existing tracks; return how many.
+
+        New tracks get fresh IDs and age 1; detection stops at `max_features`.
+        """
         import cv2 as cv
         import numpy as np
 
@@ -305,11 +330,18 @@ class FeatureTracker:
 
     def _track_rows(self) -> list[dict[str, Any]]:
         """Current tracks as `tracks.jsonl` entries (ID, xy, age in frames)."""
-        points = self.points.reshape(-1, 2) if self.points is not None else []
+        if self.points is None:
+            return []
+        points = self.points.reshape(-1, 2)
         return [
             {"id": identifier, "xy": list(map(float, point)), "age_frames": age}
             for identifier, point, age in zip(self.ids, points, self.ages)
         ]
+
+
+def _trail(start: Array, end: Array) -> Trail:
+    """One motion line from OpenCV (x, y) points, as plain floats."""
+    return (float(start[0]), float(start[1])), (float(end[0]), float(end[1]))
 
 
 def track_capture(
@@ -319,8 +351,8 @@ def track_capture(
     config: TrackingConfig = TrackingConfig(),
     max_frames: int | None = None,
     stream_id: str | None = None,
-    viewer=None,
-    viewer_factory=None,
+    viewer: ViewerClient | None = None,
+    viewer_factory: ViewerFactory | None = None,
     display_rotation: int = 90,
 ) -> dict[str, Any]:
     """Replay one camera stream into a new directory of tracks and overlays.
@@ -390,10 +422,11 @@ def track_capture(
 class _StreamSelection:
     """Accept camera events of one stream: the given one, or the first seen."""
 
-    def __init__(self, stream_id: str | None):
+    def __init__(self, stream_id: str | None) -> None:
         self.stream_id = stream_id
 
     def accepts(self, event: dict[str, Any]) -> bool:
+        """True for camera events of the selected stream."""
         if event["type"] != "CameraSample":
             return False
         if self.stream_id is None:
@@ -401,7 +434,14 @@ class _StreamSelection:
         return event["stream_id"] == self.stream_id
 
 
-def _track_event(tracker, capture, event, config, display_rotation, count):
+def _track_event(
+    tracker: FeatureTracker,
+    capture: Path,
+    event: dict[str, Any],
+    config: TrackingConfig,
+    display_rotation: int,
+    count: int,
+) -> tuple[dict[str, Any], bytes, tuple[int, int]]:
     """Track one camera event; return (row, overlay JPEG bytes, overlay (w, h))."""
     import cv2 as cv
 
@@ -430,7 +470,7 @@ def _track_event(tracker, capture, event, config, display_rotation, count):
     return row, encoded.tobytes(), (overlay.shape[1], overlay.shape[0])
 
 
-def _read_verified_image(capture: Path, event: dict[str, Any]):
+def _read_verified_image(capture: Path, event: dict[str, Any]) -> Array:
     """Decode a camera asset after checking containment, size and SHA-256."""
     import cv2 as cv
     import numpy as np
@@ -450,7 +490,7 @@ def _read_verified_image(capture: Path, event: dict[str, Any]):
     return image
 
 
-def _resize_for_tracking(image, max_width: int):
+def _resize_for_tracking(image: Array, max_width: int) -> Array:
     """Shrink wide images to limit cost; never upscale small frames."""
     import cv2 as cv
 
@@ -463,7 +503,13 @@ def _resize_for_tracking(image, max_width: int):
     )
 
 
-def _draw_overlay(image, trails, row, display_rotation: int, count: int):
+def _draw_overlay(
+    image: Array,
+    trails: list[Trail],
+    row: dict[str, Any],
+    display_rotation: int,
+    count: int,
+) -> Array:
     """Draw motions and tracks on `image`, rotate for display, add a caption.
 
     Rotation is applied only to the rendered overlay. Serialized coordinates
@@ -507,7 +553,7 @@ class _TrackingPublisher:
 
     COUNTS = ("tracked", "added", "rejected_flow", "rejected_geometry")
 
-    def __init__(self, viewer):
+    def __init__(self, viewer: ViewerClient) -> None:
         from fusion_viewer import RunSpec
 
         self.viewer = viewer
@@ -518,7 +564,14 @@ class _TrackingPublisher:
             )
         )
 
-    def publish(self, row, event, overlay_jpeg: bytes, overlay_size) -> None:
+    def publish(
+        self,
+        row: dict[str, Any],
+        event: dict[str, Any],
+        overlay_jpeg: bytes,
+        overlay_size: tuple[int, int],
+    ) -> None:
+        """Publish one overlay and its counts, timed from the first receive."""
         from fusion_viewer import ImageSample, SampleTime, ScalarSample
 
         if self.origin is None:

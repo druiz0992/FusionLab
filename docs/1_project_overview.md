@@ -85,6 +85,8 @@ src/fusionlab/
       visual_odometry.py               multiframe estimator (MonocularOdometry)
       frame_result.py                  typed poses.jsonl records (FrameResult, TrackingStatus)
       policies.py                      named pose-acceptance, keyframe and landmark variants
+      pnp.py                           PnP RANSAC, refinement and positive-depth support
+      triangulation.py                 two-view ray triangulation and candidate quality
       runner.py                        runs VO over tracks; writes poses, reports, summary
       landmark_refinement.py           landmark-only optimization
       local_bundle_adjustment.py       joint local pose/landmark optimization

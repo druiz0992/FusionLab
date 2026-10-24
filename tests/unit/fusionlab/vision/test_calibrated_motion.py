@@ -52,3 +52,68 @@ class CalibratedMotionTests(unittest.TestCase):
     def test_invalid_inputs(self):
         with self.assertRaises(ValueError):
             estimate_motion([], [], self.np.eye(3), [0] * 5)
+
+
+class AnalyzeMotionTests(unittest.TestCase):
+    def setUp(self):
+        self.np, _ = require("numpy", "cv2")
+
+    def write_inputs(self, root, calibration):
+        import json
+
+        from support.vision import translating_camera_rows
+
+        tracks = root / "tracks.jsonl"
+        tracks.write_text(
+            "".join(json.dumps(row) + "\n" for row in translating_camera_rows(11))
+        )
+        calibration_path = root / "calibration.json"
+        calibration_path.write_text(json.dumps(calibration))
+        return tracks, calibration_path
+
+    def test_known_translation_is_saved_with_tracking_camera(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from fusionlab.vision.calibrated_motion import analyze_motion
+        from support.vision import CAMERA_MATRIX, calibration_json
+
+        np = self.np
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tracks, calibration = self.write_inputs(root, calibration_json())
+            report = analyze_motion(
+                tracks, calibration, root / "motion", frame_a=0, frame_b=10
+            )
+            saved = json.loads((root / "motion" / "motion.json").read_text())
+            self.assertEqual(saved, report)
+            with self.assertRaises(FileExistsError):
+                analyze_motion(
+                    tracks, calibration, root / "motion", frame_a=0, frame_b=10
+                )
+        self.assertEqual(report["status"], "accepted_pair")
+        # The camera moved 2.5 units along +X; only the direction is observable.
+        np.testing.assert_allclose(
+            report["camera_b_center_in_a_unit"], [1.0, 0.0, 0.0], atol=1e-3
+        )
+        np.testing.assert_allclose(report["tracking_camera_matrix"], CAMERA_MATRIX)
+        self.assertAlmostEqual(report["source_interval_s"], 1.0)
+        self.assertEqual(report["calibration_status"], "unknown")
+
+    def test_calibration_for_another_image_size_is_refused(self):
+        import tempfile
+        from pathlib import Path
+
+        from fusionlab.vision.calibrated_motion import analyze_motion
+        from support.vision import calibration_json
+
+        calibration = {**calibration_json(), "image_size": [1280, 960]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tracks, calibration_path = self.write_inputs(root, calibration)
+            with self.assertRaisesRegex(ValueError, "image dimensions"):
+                analyze_motion(
+                    tracks, calibration_path, root / "motion", frame_a=0, frame_b=10
+                )
+            self.assertFalse((root / "motion").exists())

@@ -42,12 +42,15 @@ class LocalBundleTests(unittest.TestCase):
             poses[i, :, 3] += np.array([0.025, -0.015, 0.01])
         points = truth_points + rng.normal(0, 0.04, truth_points.shape)
         original_poses, original_points = poses.copy(), points.copy()
-        optimized_poses, optimized_points, report = optimize_window(
+        report = optimize_window(
             poses, points, observations, focal=500.0, max_evaluations=60
         )
-        self.assertTrue(report["accepted"])
-        self.assertLess(report["final_robust_cost"], report["initial_robust_cost"])
-        self.assertTrue(report["positive_depth"])
+        optimized_poses, optimized_points = report.poses, report.points
+        self.assertTrue(report.accepted)
+        self.assertLess(report.final_robust_cost, report.initial_robust_cost)
+        self.assertTrue(report.positive_depth)
+        self.assertLessEqual(report.evaluations, 60)
+        self.assertEqual(report.summary()["fixed_pose_indices"], [0, 1])
         np.testing.assert_array_equal(optimized_poses[:2], poses[:2])
         np.testing.assert_array_equal(poses, original_poses)
         np.testing.assert_array_equal(points, original_points)
@@ -61,11 +64,14 @@ class LocalBundleTests(unittest.TestCase):
         )
 
     def test_degenerate_anchor_baseline_is_rejected(self):
-        from fusionlab.vision.odometry.local_bundle_adjustment import optimize_window
+        from fusionlab.vision.odometry.local_bundle_adjustment import (
+            DegenerateAnchorBaseline,
+            optimize_window,
+        )
 
         np = self.np
         poses = np.array([np.column_stack((np.eye(3), np.zeros(3))) for _ in range(4)])
-        with self.assertRaisesRegex(ValueError, "baseline"):
+        with self.assertRaisesRegex(DegenerateAnchorBaseline, "baseline"):
             optimize_window(
                 poses,
                 np.array([[0.0, 0.0, 5.0]]),
@@ -75,7 +81,13 @@ class LocalBundleTests(unittest.TestCase):
 
     def test_odometry_rejects_bundle_that_degrades_current_support(self):
         from unittest.mock import patch
-        from fusionlab.vision.odometry.visual_odometry import MonocularOdometry
+        from fusionlab.vision.odometry.local_bundle_adjustment import (
+            WindowAdjustment,
+        )
+        from fusionlab.vision.odometry.visual_odometry import (
+            MonocularOdometry,
+            _BundleFrame,
+        )
 
         np = self.np
         vo = MonocularOdometry({})
@@ -92,17 +104,52 @@ class LocalBundleTests(unittest.TestCase):
         vo.pose = poses[-1].copy()
         vo.step = 6
         vo.bundle_window = [
-            {"pose": pose.copy(), "points": observations(pose), "step": i}
+            _BundleFrame(pose.copy(), observations(pose), i)
             for i, pose in enumerate(poses[:3])
         ]
         bad = poses.copy()
         bad[-1, 0, 3] += 10.0
         before = vo.pose.copy()
+        # A window step the solver accepted, but which breaks the current frame.
+        lowered_cost = WindowAdjustment(
+            bad, points, True, 2.0, 1.0, 1.0, 0.5, True, True, 3
+        )
         with patch(
             "fusionlab.vision.odometry.local_bundle_adjustment.optimize_window",
-            return_value=(bad, points, {"accepted": True}),
+            return_value=lowered_cost,
         ):
             report = vo._adjust_bundle(observations(poses[-1]), 500.0)
         self.assertFalse(report["accepted"])
         self.assertEqual(report["reason"], "current_frame_support_degraded")
         np.testing.assert_array_equal(vo.pose, before)
+
+    def test_adopted_bundle_updates_every_stored_copy_of_window_poses(self):
+        from fusionlab.vision.odometry.visual_odometry import (
+            MonocularOdometry,
+            _BundleFrame,
+            _Keyframe,
+        )
+
+        np = self.np
+        vo = MonocularOdometry({})
+        poses = np.array(
+            [np.column_stack((np.eye(3), [-0.2 * i, 0.0, 0.0])) for i in range(3)]
+        )
+        corrected = poses.copy()
+        corrected[:, 1, 3] += 0.01
+        outside = np.column_stack((np.eye(3), [5.0, 0.0, 0.0]))
+        ray = np.zeros(2)
+        window = [_BundleFrame(pose.copy(), {}, i) for i, pose in enumerate(poses)]
+        vo.bundle_window = window
+        vo.reference = _Keyframe({}, poses[1].copy())
+        vo.landmark_observations = {7: [(poses[0].copy(), ray), (outside, ray)]}
+        landmarks = {7: np.array([0.0, 0.0, 5.0])}
+        vo._apply_bundle_correction(window, poses, corrected, landmarks)
+        np.testing.assert_array_equal(vo.reference.pose, corrected[1])
+        history = vo.landmark_observations[7]
+        np.testing.assert_array_equal(history[0][0], corrected[0])
+        # Poses outside the window are never rewritten.
+        np.testing.assert_array_equal(history[1][0], outside)
+        np.testing.assert_array_equal(window[2].pose, corrected[2])
+        np.testing.assert_array_equal(vo.pose, corrected[2])
+        self.assertIs(vo.landmarks, landmarks)

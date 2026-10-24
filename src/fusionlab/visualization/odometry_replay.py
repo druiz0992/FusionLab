@@ -6,9 +6,14 @@ Presentation only: nothing here feeds back into estimation.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fusionlab.vision.odometry.frame_result import FrameResult, TrackingStatus
 from fusionlab.vision.tracks import TrackFrame
+
+if TYPE_CHECKING:
+    from fusion_viewer import SampleTime, ViewerClient
+    from fusionlab._typing import Array
 
 # Numeric codes for the status signal plotted in the viewer.
 STATUS_CODES = {
@@ -46,7 +51,8 @@ class OdometryReplay:
     units), starting at the segment's first camera.
     """
 
-    def __init__(self, viewer, tracks: Path):
+    def __init__(self, viewer: ViewerClient, tracks: Path) -> None:
+        """Register the run and display frame; `tracks` is the tracks.jsonl path."""
         from fusion_viewer import FrameSpec, RunSpec
 
         self.viewer = viewer
@@ -79,7 +85,7 @@ class OdometryReplay:
         image = self._with_banner(self._load_overlay(row), result, index)
         self._publish_image(stamp, image)
 
-    def _stamp(self, row: TrackFrame):
+    def _stamp(self, row: TrackFrame) -> SampleTime:
         """Replay time: laptop receive time relative to the first frame."""
         from fusion_viewer import SampleTime
 
@@ -96,13 +102,16 @@ class OdometryReplay:
                 self.path = [(0.0, 0.0)]
                 self.active_segment = result.segment
             center = result.camera_center_arbitrary
+            if center is None:
+                raise ValueError("Tracking result has no camera center")
             self.path.append((center[0], center[2]))
         else:
             # Do not leave the last successful pose looking current during loss.
             self.path = []
             self.active_segment = None
 
-    def _publish_path(self, stamp) -> None:
+    def _publish_path(self, stamp: SampleTime) -> None:
+        """The active segment's path; an empty path clears the display."""
         from fusion_viewer import Trajectory2D
 
         self.viewer.publish(
@@ -115,10 +124,10 @@ class OdometryReplay:
             ),
         )
 
-    def _publish_signals(self, stamp, result: FrameResult) -> None:
+    def _publish_signals(self, stamp: SampleTime, result: FrameResult) -> None:
         """Status, segment, map counts, and pixel errors when measured."""
         diagnostics = result.diagnostics
-        signals = [
+        signals: list[tuple[str, float, str]] = [
             ("status", STATUS_CODES[result.status], "state"),
             ("segment", result.segment, "segment"),
         ]
@@ -133,7 +142,10 @@ class OdometryReplay:
         for key, value, units in signals:
             self._publish_scalar(stamp, key, value, units)
 
-    def _publish_scalar(self, stamp, key: str, value, units: str) -> None:
+    def _publish_scalar(
+        self, stamp: SampleTime, key: str, value: float, units: str
+    ) -> None:
+        """One `signals/vo/<key>` sample."""
         from fusion_viewer import ScalarSample
 
         self.viewer.publish(
@@ -143,7 +155,7 @@ class OdometryReplay:
             ),
         )
 
-    def _load_overlay(self, row: TrackFrame):
+    def _load_overlay(self, row: TrackFrame) -> Array:
         """The tracking overlay JPEG for this row, kept inside the tracks folder."""
         import cv2
 
@@ -160,7 +172,7 @@ class OdometryReplay:
             raise ValueError(f"Missing or unreadable tracking overlay: {path}")
         return image
 
-    def _with_banner(self, image, result: FrameResult, index: int):
+    def _with_banner(self, image: Array, result: FrameResult, index: int) -> Array:
         """Stack a status banner above the overlay.
 
         The tracking overlay already has the selected display rotation applied;
@@ -199,7 +211,8 @@ class OdometryReplay:
             )
         return np.vstack((banner, image))
 
-    def _publish_image(self, stamp, image) -> None:
+    def _publish_image(self, stamp: SampleTime, image: Array) -> None:
+        """The bannered overlay, JPEG-encoded, as `rgb/tracking`."""
         import cv2
         from fusion_viewer import ImageSample
 

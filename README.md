@@ -251,9 +251,12 @@ python3 scripts/restore_data_layout.py --check               # data layout audit
 ```
 
 mypy is configured in `pyproject.toml` (OpenCV, SciPy and Rerun are treated as
-untyped). The project is not yet clean as a whole (84 errors on 2026-10-21); check
-the modules you change. Array annotations use `fusionlab._typing` aliases imported
-under `TYPE_CHECKING`, so NumPy stays optional at runtime.
+untyped). The project is not yet clean as a whole (62 errors on 2026-10-24); check
+the modules you change. Fully annotated modules (the VO estimator, `pnp`,
+`triangulation`, local BA, calibrated motion, feature tracking, VO motion
+diagnostics and the VO replay) should also pass with `--disallow-untyped-defs`.
+Array annotations use `fusionlab._typing` aliases imported under `TYPE_CHECKING`,
+so NumPy stays optional at runtime.
 
 For behavior-neutral refactors, `scripts/output_parity.sh REFERENCE_SRC CANDIDATE_SRC
 WORK_DIR` runs tracking, VO policy variants, two-view, camera-motion and diagnose-vo

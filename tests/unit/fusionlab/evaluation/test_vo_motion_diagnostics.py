@@ -1,14 +1,17 @@
 """Constant-velocity, spatial-support and gyro diagnostics."""
 
 import unittest
+from dataclasses import replace
 
 from fusionlab.evaluation.vo_motion_diagnostics import (
+    AcceptedPose,
     predict_constant_velocity,
     spatial_distribution,
     evaluate_pose,
     gyro_interval,
 )
 
+from fusionlab.vision.odometry.visual_odometry import PnpSnapshot
 from support import require
 
 
@@ -24,14 +27,14 @@ class MotionDiagnosticTests(unittest.TestCase):
             return np.column_stack((r, -r @ np.array([time, 0.0, 0.0])))
 
         history = [
-            {"time": 0, "pose": pose(0.0)},
-            {"time": 200_000_000, "pose": pose(0.2)},
+            AcceptedPose(pose(0.0), 0, segment=1),
+            AcceptedPose(pose(0.2), 200_000_000, segment=1),
         ]
         predicted = predict_constant_velocity(history, 500_000_000)
         np.testing.assert_allclose(predicted, pose(0.5), atol=1e-9)
         self.assertIsNone(predict_constant_velocity(history, 1_000_000_000))
         self.assertIsNone(predict_constant_velocity(history[:1], 500_000_000))
-        changed = [{**history[0], "segment": 1}, {**history[1], "segment": 2}]
+        changed = [history[0], replace(history[1], segment=2)]
         self.assertIsNone(predict_constant_velocity(changed, 500_000_000))
         self.assertIsNone(predict_constant_velocity(history, 100_000_000))
 
@@ -43,7 +46,7 @@ class MotionDiagnosticTests(unittest.TestCase):
         camera = np.array([[500.0, 0, 320], [0, 500.0, 240], [0, 0, 1.0]])
         normalized = objects[:, :2] / objects[:, 2, None]
         pixels = normalized * 500 + [320, 240]
-        snapshot = {"objects": objects, "normalized": normalized, "camera": camera}
+        snapshot = PnpSnapshot([0, 1, 2, 3], objects, normalized, camera, None)
         pose = np.column_stack((np.eye(3), np.zeros(3)))
         correct = evaluate_pose(pose, snapshot, pixels, [640, 480])
         wrong = pose.copy()

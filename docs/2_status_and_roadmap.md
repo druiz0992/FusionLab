@@ -110,26 +110,26 @@ No estimator defaults were changed. Independent trajectory accuracy remains unva
 
 ## Next work
 
-**Unfinished (2026-10-21): code cleanup before per-track triangulation.** The user
+**Unfinished (2026-10-24): code cleanup before per-track triangulation.** The user
 asked to finish cleaning before more algorithm work. Done and pushed (outputs
 byte-identical each step): typed `TrackFrame`/`FrameResult`, VO split into steps,
 policy registries, `cli/` package, `sensor_stream/inspection/`, tests in
 `unit/`/`integration/`/`support/`, `diagnose-map`, and splitting local BA,
 two-view motion, the feature tracker, VO diagnostics and the VO viewer replay.
-mypy (dev extra) and `fusionlab/_typing.py` array aliases were added; the typing
-pass itself is not started. Next actions, in order:
-1. Annotate every signature in the six group-1 files (`local_bundle_adjustment`,
-   `calibrated_motion`, `feature_tracking`, `visual_odometry`,
-   `vo_motion_diagnostics`, `odometry_replay`) and make them mypy-clean
-   (21 errors: mostly `None`-able pose/anchor/reference state and untyped
-   diagnostic dicts). Check with `scripts/output_parity.sh`.
-2. Group 2, before the first EuRoC run: split and type
+Group-1 typing pass done 2026-10-24: the six group-1 files plus new
+`vision/odometry/pnp.py` and `triangulation.py` pass mypy with
+`--disallow-untyped-defs` (project total 84 → 62 errors). Estimator state uses
+typed objects (anchor, keyframe, BA window frame, `PnpSnapshot`, triangulation
+counts), BA returns a `WindowAdjustment` and raises `DegenerateAnchorBaseline`.
+Validation: full suite (173 tests) and `scripts/output_parity.sh` (117 files,
+0 differ). Next actions, in order:
+1. Group 2, before the first EuRoC run: split and type
    `evaluation/ground_truth.evaluate_run` (195 lines) and
    `recordings/euroc.import_sequence` (102 lines).
-3. Ask the user about group 3 (`sensor_stream/source._receive` 249 lines, viewer
+2. Ask the user about group 3 (`sensor_stream/source._receive` 249 lines, viewer
    `api.publish`/`rerun_backend.publish`, inspection plots, IMU baselines,
    calibration fitting); it was deferred because acquisition needs a live phone.
-4. Then item 2 below: per-track triangulation as an opt-in landmark variant.
+3. Then item 2 below: per-track triangulation as an opt-in landmark variant.
 
 **Unfinished (2026-10-18): real EuRoC benchmark run.** EuRoC cam0 import and
 timestamp-associated ground-truth evaluation are implemented and tested on
